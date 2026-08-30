@@ -54,7 +54,7 @@ fun PantallaHistorial(viewModel: MainViewModel) {
             text = "Historial",
             fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF2E401F)
+            color = MaterialTheme.colorScheme.onBackground
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -128,7 +128,7 @@ fun TarjetaZonaHistorial(
     estaExpandido: Boolean, 
     onClick: () -> Unit
 ) {
-    val verdeOscuro = Color(0xFF2E401F)
+    val colorTexto = MaterialTheme.colorScheme.onSurface
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -152,14 +152,14 @@ fun TarjetaZonaHistorial(
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
-                    Text(text = nombreZona, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = verdeOscuro)
-                    Text(text = "$cantidadAnalisis análisis realizados", fontSize = 13.sp, color = Color.Gray)
+                    Text(text = nombreZona, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = colorTexto)
+                    Text(text = "$cantidadAnalisis análisis realizados", fontSize = 13.sp, color = colorTexto.copy(alpha = 0.6f))
                 }
             }
             Icon(
                 imageVector = if (estaExpandido) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                 contentDescription = null,
-                tint = Color.Gray
+                tint = colorTexto.copy(alpha = 0.5f)
             )
         }
     }
@@ -168,12 +168,12 @@ fun TarjetaZonaHistorial(
 @Composable
 fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis) {
     val colorIndicador = Color(analisis.valorColor)
-    val verdeOscuro = Color(0xFF2E401F)
+    val colorTexto = MaterialTheme.colorScheme.onSurface
     
     Surface(
         shape = RoundedCornerShape(24.dp),
-        color = Color(0xFFF9FAFB),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE5E7EB)),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)),
         modifier = Modifier.fillMaxWidth().bounceClick()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -188,13 +188,13 @@ fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis) {
                     text = analisis.nombrePlanta, 
                     fontWeight = FontWeight.Bold, 
                     fontSize = 16.sp, 
-                    color = verdeOscuro,
+                    color = colorTexto,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
                     text = "${analisis.fecha} • ${analisis.hora}", 
                     fontSize = 11.sp, 
-                    color = Color.Gray
+                    color = colorTexto.copy(alpha = 0.5f)
                 )
             }
 
@@ -214,10 +214,10 @@ fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis) {
 }
 
 @Composable
-fun ItemTecnicoHistorial(icono: androidx.compose.ui.graphics.vector.ImageVector, texto: String, colorIcono: Color = Color.Gray) {
+fun ItemTecnicoHistorial(icono: androidx.compose.ui.graphics.vector.ImageVector, texto: String, colorIcono: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(icono, null, modifier = Modifier.size(14.dp), tint = colorIcono)
         Spacer(modifier = Modifier.width(4.dp))
-        Text(text = texto, fontSize = 11.sp, color = if (colorIcono == Color.Gray) Color.Gray else colorIcono, fontWeight = if (colorIcono == Color.Gray) FontWeight.Normal else FontWeight.Bold)
+        Text(text = texto, fontSize = 11.sp, color = colorIcono, fontWeight = if (colorIcono == MaterialTheme.colorScheme.onSurfaceVariant) FontWeight.Normal else FontWeight.Bold)
     }
 }

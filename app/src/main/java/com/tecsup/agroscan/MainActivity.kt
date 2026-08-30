@@ -15,6 +15,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tecsup.agroscan.screen.PantallaPanelControl
 import com.tecsup.agroscan.ui.theme.AgroScanTheme
@@ -43,12 +45,22 @@ class MainActivity : ComponentActivity() {
                 if (ubicacionOk) {
                     try {
                         fusedLocationClient.lastLocation.addOnSuccessListener { location: android.location.Location? ->
-                            location?.let {
-                                viewModel.obtenerClimaActual(it.latitude, it.longitude)
+                            if (location != null) {
+                                viewModel.obtenerClimaActual(location.latitude, location.longitude)
+                            } else {
+                                // Si la última ubicación es nula, solicitar una nueva
+                                fusedLocationClient.getCurrentLocation(
+                                    Priority.PRIORITY_HIGH_ACCURACY,
+                                    CancellationTokenSource().token
+                                ).addOnSuccessListener { freshLocation ->
+                                    freshLocation?.let {
+                                        viewModel.obtenerClimaActual(it.latitude, it.longitude)
+                                    }
+                                }
                             }
                         }
                     } catch (e: SecurityException) {
-                        // Manejar excepción
+                        android.util.Log.e("MainActivity", "Error de permisos: ${e.message}")
                     }
                 }
             }
@@ -64,7 +76,7 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            AgroScanTheme {
+            AgroScanTheme(darkTheme = viewModel.modoOscuroHabilitado) {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         PantallaPanelControl(viewModel = viewModel)

@@ -62,15 +62,18 @@ fun PantallaPanelControl(
     val estadoHojaAgregar = rememberModalBottomSheetState()
     val estadoHojaEditar = rememberModalBottomSheetState()
 
-    // Estados para dibujo de parcelas
+    // Estados para persistir datos del formulario durante el dibujo
+    var nombreEnProceso by remember { mutableStateOf("") }
+    var cultivoEnProceso by remember { mutableStateOf("") }
     var modoDibujoActivo by remember { mutableStateOf(false) }
+    var modoEdicionPoligono by remember { mutableStateOf(false) }
 
     // Estados para eliminación segura
     var mostrarDialogoEliminar by remember { mutableStateOf(false) }
     var zonaParaEliminar by remember { mutableStateOf<InformacionZona?>(null) }
 
     val colorFondo = MaterialTheme.colorScheme.background
-    val colorTextoNav = Color(0xFF2E401F)
+    val colorTextoNav = MaterialTheme.colorScheme.primary
 
     Box(modifier = Modifier.fillMaxSize().background(colorFondo)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -99,6 +102,11 @@ fun PantallaPanelControl(
                             alHacerClicEnAgregar = { mostrarHojaAgregar = true },
                             alEditarZona = {
                                 zonaSeleccionada = it
+                                nombreEnProceso = it.nombre
+                                cultivoEnProceso = it.cultivo
+                                viewModel.puntosEdicion.clear()
+                                viewModel.puntosEdicion.addAll(it.vertices)
+                                modoEdicionPoligono = true
                                 mostrarHojaEditar = true
                             },
                             alEliminarZona = {
@@ -118,7 +126,7 @@ fun PantallaPanelControl(
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 12.dp).fillMaxWidth().height(72.dp),
             shape = RoundedCornerShape(36.dp),
-            color = Color.White.copy(alpha = 0.98f),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
             shadowElevation = 10.dp
         ) {
             Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
@@ -160,12 +168,20 @@ fun PantallaPanelControl(
             ) {
                 FormularioAgregarZona(
                     viewModel = viewModel,
+                    nombreInicial = nombreEnProceso,
+                    cultivoInicial = cultivoEnProceso,
+                    alCambiarDatos = { n, c ->
+                        nombreEnProceso = n
+                        cultivoEnProceso = c
+                    },
                     alDibujarEnMapa = {
                         mostrarHojaAgregar = false
                         modoDibujoActivo = true
                     },
                     alAgregar = { nuevaZona ->
                         viewModel.agregarZona(nuevaZona)
+                        nombreEnProceso = ""
+                        cultivoEnProceso = ""
                         mostrarHojaAgregar = false
                     }
                 )
@@ -174,14 +190,31 @@ fun PantallaPanelControl(
 
         if (mostrarHojaEditar && zonaSeleccionada != null) {
             ModalBottomSheet(
-                onDismissRequest = { mostrarHojaEditar = false },
+                onDismissRequest = { 
+                    mostrarHojaEditar = false 
+                    modoEdicionPoligono = false
+                },
                 sheetState = estadoHojaEditar,
                 shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
             ) {
                 FormularioEditarZona(
+                    viewModel = viewModel,
                     zona = zonaSeleccionada!!,
+                    nombreActual = nombreEnProceso,
+                    cultivoActual = cultivoEnProceso,
+                    alCambiarDatos = { n, c ->
+                        nombreEnProceso = n
+                        cultivoEnProceso = c
+                    },
+                    alDibujarEnMapa = {
+                        mostrarHojaEditar = false
+                        modoDibujoActivo = true
+                    },
                     alActualizar = { zonaActualizada ->
                         viewModel.actualizarZona(zonaSeleccionada!!, zonaActualizada)
+                        nombreEnProceso = ""
+                        cultivoEnProceso = ""
+                        modoEdicionPoligono = false
                         mostrarHojaEditar = false
                     }
                 )
@@ -208,10 +241,14 @@ fun PantallaPanelControl(
         if (modoDibujoActivo) {
             PantallaDibujoParcela(
                 viewModel = viewModel,
-                alTerminar = { modoDibujoActivo = false },
+                alTerminar = { 
+                    modoDibujoActivo = false
+                    if (modoEdicionPoligono) mostrarHojaEditar = true else mostrarHojaAgregar = true
+                },
                 alCancelar = { 
-                    viewModel.puntosEdicion.clear()
+                    if (!modoEdicionPoligono) viewModel.puntosEdicion.clear()
                     modoDibujoActivo = false 
+                    if (modoEdicionPoligono) mostrarHojaEditar = true else mostrarHojaAgregar = true
                 }
             )
         }
@@ -226,8 +263,10 @@ fun PantallaDibujoParcela(
 ) {
     val contexto = LocalContext.current
     val hectareasCalculadas = viewModel.calcularHectareas(viewModel.puntosEdicion)
-    val verdeOscuro = Color(0xFF2E401F)
     val locale = LocalConfiguration.current.locales[0]
+
+    // Configuración necesaria para OSM
+    Configuration.getInstance().userAgentValue = contexto.packageName
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
@@ -250,11 +289,10 @@ fun PantallaDibujoParcela(
             },
             update = { mapView ->
                 mapView.overlays.removeAll { it is Marker || it is Polygon }
-                
+
                 if (viewModel.puntosEdicion.isNotEmpty()) {
                     val puntosGeo = viewModel.puntosEdicion.map { GeoPoint(it.latitude, it.longitude) }
-                    
-                    // Dibujar Polígono
+
                     if (puntosGeo.size >= 3) {
                         val poligono = Polygon(mapView)
                         poligono.points = puntosGeo
@@ -264,7 +302,6 @@ fun PantallaDibujoParcela(
                         mapView.overlays.add(poligono)
                     }
 
-                    // Dibujar Marcadores (vértices)
                     viewModel.puntosEdicion.forEach { latLng ->
                         val marcador = Marker(mapView)
                         marcador.position = GeoPoint(latLng.latitude, latLng.longitude)
@@ -287,11 +324,11 @@ fun PantallaDibujoParcela(
         ) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
-                color = Color.White.copy(alpha = 0.9f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Dibujando Parcela", fontWeight = FontWeight.Bold, color = verdeOscuro)
+                    Text("Dibujando Parcela", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                     Text("Toca el mapa para añadir los límites", fontSize = 12.sp, color = Color.Gray)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -316,7 +353,7 @@ fun PantallaDibujoParcela(
                 onClick = alCancelar,
                 modifier = Modifier.weight(1f).height(56.dp),
                 shape = RoundedCornerShape(28.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Gray)
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = Color.Gray)
             ) {
                 Text("Cancelar")
             }
@@ -331,15 +368,14 @@ fun PantallaDibujoParcela(
             }
         }
 
-        // Botón Deshacer
         if (viewModel.puntosEdicion.isNotEmpty()) {
             FloatingActionButton(
                 onClick = { viewModel.puntosEdicion.removeAt(viewModel.puntosEdicion.lastIndex) },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(bottom = 120.dp, end = 24.dp),
-                containerColor = Color.White,
-                contentColor = verdeOscuro,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
                 shape = CircleShape
             ) {
                 Icon(Icons.AutoMirrored.Filled.Undo, "Deshacer")
@@ -356,24 +392,23 @@ fun DialogoConfirmacionEliminar(
     alCancelar: () -> Unit
 ) {
     var textoConfirmacion by remember { mutableStateOf("") }
-    val verdeOscuro = Color(0xFF2E401F)
 
     AlertDialog(
         onDismissRequest = alCancelar,
         shape = RoundedCornerShape(28.dp),
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = {
             Text(
                 text = "Confirmar Eliminación",
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFC81E1E) // Rojo alerta
+                color = Color(0xFFC81E1E)
             )
         },
         text = {
             Column {
                 Text(
                     text = "¿Estás seguro de que deseas eliminar la zona \"$nombreZona\"?",
-                    color = verdeOscuro
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
@@ -386,7 +421,7 @@ fun DialogoConfirmacionEliminar(
                     text = "Escribe \"ELIMINAR\" para continuar:",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = verdeOscuro
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
@@ -409,7 +444,7 @@ fun DialogoConfirmacionEliminar(
                 enabled = textoConfirmacion == "ELIMINAR",
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFC81E1E),
-                    disabledContainerColor = Color(0xFFFDE8E8)
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.bounceClick()
@@ -434,9 +469,10 @@ fun ContenidoPrincipalPanelControl(
     alEditarZona: (InformacionZona) -> Unit,
     alEliminarZona: (InformacionZona) -> Unit
 ) {
-    val totalHectareas = zonas.sumOf { it.hectareas }.toInt()
+    val totalHectareas = zonas.sumOf { it.hectareas }
     val proximaZonaCosecha = zonas.filter { it.diasParaCosecha <= 30 }.minByOrNull { it.diasParaCosecha }
-    val verdeOscuroTexto = Color(0xFF2E401F)
+    val colorTexto = MaterialTheme.colorScheme.onBackground
+    val locale = LocalConfiguration.current.locales[0]
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         Spacer(modifier = Modifier.height(32.dp))
@@ -447,8 +483,12 @@ fun ContenidoPrincipalPanelControl(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = "Monitoreo de Cultivos", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = verdeOscuroTexto)
-                Text(text = "$totalHectareas hectáreas en monitoreo activo", fontSize = 16.sp, color = verdeOscuroTexto.copy(alpha = 0.7f))
+                Text(text = "Monitoreo de Cultivos", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = colorTexto)
+                Text(
+                    text = "${String.format(locale, "%.2f", totalHectareas)} hectáreas en monitoreo activo", 
+                    fontSize = 16.sp, 
+                    color = colorTexto.copy(alpha = 0.7f)
+                )
             }
             
             if (datosClimaReales != null) {
@@ -462,16 +502,16 @@ fun ContenidoPrincipalPanelControl(
         
         proximaZonaCosecha?.let { zona ->
             Spacer(modifier = Modifier.height(16.dp))
-            TarjetaAlerta(titulo = "Cosecha Próxima", subtitulo = "${zona.nombre} lista en ${zona.diasParaCosecha} días", icono = Icons.Default.WarningAmber, colorContenedor = Color(0xFFFFF4E5), colorContenido = Color(0xFF855300))
+            TarjetaAlerta(titulo = "Cosecha Próxima", subtitulo = "${zona.nombre} lista en ${zona.diasParaCosecha} días", icono = Icons.Default.WarningAmber, colorContenedor = Color(0xFFFFF4E5).copy(alpha = 0.9f), colorContenido = Color(0xFF855300))
         }
 
         Spacer(modifier = Modifier.height(32.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "Mapa de Zonas", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = verdeOscuroTexto)
+                Text(text = "Mapa de Zonas", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colorTexto)
                 Spacer(modifier = Modifier.width(8.dp))
                 IconButton(onClick = alHacerClicEnAgregar, modifier = Modifier.bounceClick()) {
-                    Icon(Icons.Default.AddCircle, contentDescription = "Agregar Zona", tint = verdeOscuroTexto, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Default.AddCircle, contentDescription = "Agregar Zona", tint = colorTexto, modifier = Modifier.size(28.dp))
                 }
             }
         }
@@ -509,10 +549,10 @@ fun ClimaHeaderCargando() {
 
 @Composable
 fun ClimaHeaderCompacto(datos: DatosClima) {
-    val verdeOscuro = Color(0xFF2E401F)
+    val colorTexto = MaterialTheme.colorScheme.onSurface
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = Color(0xFFC0E0A0).copy(alpha = 0.15f),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
         modifier = Modifier.bounceClick()
     ) {
         Row(
@@ -525,14 +565,14 @@ fun ClimaHeaderCompacto(datos: DatosClima) {
                     text = datos.temperatura, 
                     fontWeight = FontWeight.ExtraBold, 
                     fontSize = 18.sp, 
-                    color = verdeOscuro
+                    color = colorTexto
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.WaterDrop, null, tint = verdeOscuro.copy(alpha = 0.5f), modifier = Modifier.size(10.dp))
+                    Icon(Icons.Default.WaterDrop, null, tint = colorTexto.copy(alpha = 0.5f), modifier = Modifier.size(10.dp))
                     Text(
                         text = datos.humedad, 
                         fontSize = 11.sp, 
-                        color = verdeOscuro.copy(alpha = 0.6f),
+                        color = colorTexto.copy(alpha = 0.6f),
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -590,7 +630,7 @@ fun CuadriculaZonas(zonas: List<InformacionZona>, alHacerClicEnZona: (Informacio
 fun TarjetaZona(zona: InformacionZona, alHacerClic: () -> Unit, alEditar: () -> Unit, alEliminar: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(28.dp), 
-        color = Color.White, 
+        color = MaterialTheme.colorScheme.surface, 
         modifier = Modifier.padding(6.dp).fillMaxWidth().height(200.dp).bounceClick().clickable { alHacerClic() }, 
         shadowElevation = 2.dp
     ) {
@@ -604,8 +644,8 @@ fun TarjetaZona(zona: InformacionZona, alHacerClic: () -> Unit, alEditar: () -> 
                     Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.LocationOn, contentDescription = null, tint = zona.color) }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(text = zona.nombre, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(text = zona.cultivo, fontSize = 13.sp, color = Color.Gray)
+                Text(text = zona.nombre, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                Text(text = zona.cultivo, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -614,34 +654,53 @@ fun TarjetaZona(zona: InformacionZona, alHacerClic: () -> Unit, alEditar: () -> 
 @Composable
 fun FormularioAgregarZona(
     viewModel: MainViewModel,
+    nombreInicial: String,
+    cultivoInicial: String,
+    alCambiarDatos: (String, String) -> Unit,
     alDibujarEnMapa: () -> Unit,
     alAgregar: (InformacionZona) -> Unit
 ) {
-    var nombre by remember { mutableStateOf("") }
-    var cultivo by remember { mutableStateOf("") }
+    var nombre by remember(nombreInicial) { mutableStateOf(nombreInicial) }
+    var cultivo by remember(cultivoInicial) { mutableStateOf(cultivoInicial) }
     val locale = LocalConfiguration.current.locales[0]
-    var hectareas by remember { 
-        mutableStateOf(
-            if (viewModel.puntosEdicion.isNotEmpty()) 
-                String.format(locale, "%.2f", viewModel.calcularHectareas(viewModel.puntosEdicion)) 
-            else ""
-        ) 
-    }
+    
+    val hectareasCalculadas = if (viewModel.puntosEdicion.isNotEmpty()) 
+        String.format(locale, "%.2f", viewModel.calcularHectareas(viewModel.puntosEdicion)) 
+    else ""
 
     Column(modifier = Modifier.fillMaxWidth().padding(24.dp).verticalScroll(rememberScrollState())) {
-        Text("Nueva Zona de Cultivo", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("Nueva Zona de Cultivo", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(20.dp))
         
-        OutlinedTextField(value = nombre, onValueChange = { nombre = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+        OutlinedTextField(
+            value = nombre, 
+            onValueChange = { 
+                nombre = it
+                alCambiarDatos(it, cultivo)
+            }, 
+            label = { Text("Nombre") }, 
+            modifier = Modifier.fillMaxWidth(), 
+            shape = RoundedCornerShape(16.dp)
+        )
         Spacer(modifier = Modifier.height(12.dp))
         
-        OutlinedTextField(value = cultivo, onValueChange = { cultivo = it }, label = { Text("Cultivo") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+        OutlinedTextField(
+            value = cultivo, 
+            onValueChange = { 
+                cultivo = it
+                alCambiarDatos(nombre, it)
+            }, 
+            label = { Text("Cultivo") }, 
+            modifier = Modifier.fillMaxWidth(), 
+            shape = RoundedCornerShape(16.dp)
+        )
         Spacer(modifier = Modifier.height(12.dp))
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(
-                value = hectareas, 
-                onValueChange = { hectareas = it }, 
+                value = hectareasCalculadas, 
+                onValueChange = { }, 
+                readOnly = true,
                 label = { Text("Hectáreas") }, 
                 modifier = Modifier.weight(1f), 
                 shape = RoundedCornerShape(16.dp)
@@ -658,7 +717,7 @@ fun FormularioAgregarZona(
             ) {
                 Icon(Icons.Default.Map, null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Dibujar", fontSize = 12.sp)
+                Text(if(viewModel.puntosEdicion.isEmpty()) "Dibujar" else "Redibujar", fontSize = 12.sp)
             }
         }
 
@@ -671,11 +730,12 @@ fun FormularioAgregarZona(
                     color = Color(0xFFC0E0A0), 
                     diasParaCosecha = 30, 
                     ubicacion = if (viewModel.puntosEdicion.isNotEmpty()) viewModel.puntosEdicion.first() else LatLng(-12.0, -77.0), 
-                    hectareas = hectareas.toDoubleOrNull() ?: 0.0,
+                    hectareas = hectareasCalculadas.replace(",", ".").toDoubleOrNull() ?: 0.0,
                     vertices = viewModel.puntosEdicion.toList()
                 )) 
                 viewModel.puntosEdicion.clear()
             },
+            enabled = nombre.isNotBlank() && cultivo.isNotBlank() && viewModel.puntosEdicion.size >= 3,
             modifier = Modifier.fillMaxWidth().height(56.dp).bounceClick(),
             shape = RoundedCornerShape(28.dp)
         ) { Text("Guardar Zona") }
@@ -683,19 +743,89 @@ fun FormularioAgregarZona(
 }
 
 @Composable
-fun FormularioEditarZona(zona: InformacionZona, alActualizar: (InformacionZona) -> Unit) {
-    var nombre by remember { mutableStateOf(zona.nombre) }
-    var cultivo by remember { mutableStateOf(zona.cultivo) }
+fun FormularioEditarZona(
+    viewModel: MainViewModel,
+    zona: InformacionZona, 
+    nombreActual: String,
+    cultivoActual: String,
+    alCambiarDatos: (String, String) -> Unit,
+    alDibujarEnMapa: () -> Unit,
+    alActualizar: (InformacionZona) -> Unit
+) {
+    var nombre by remember(nombreActual) { mutableStateOf(nombreActual) }
+    var cultivo by remember(cultivoActual) { mutableStateOf(cultivoActual) }
+    val locale = LocalConfiguration.current.locales[0]
+    
+    val hectareasCalculadas = if (viewModel.puntosEdicion.isNotEmpty()) 
+        String.format(locale, "%.2f", viewModel.calcularHectareas(viewModel.puntosEdicion)) 
+    else String.format(locale, "%.2f", zona.hectareas)
 
     Column(modifier = Modifier.fillMaxWidth().padding(24.dp).verticalScroll(rememberScrollState())) {
-        Text("Editar Zona", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("Editar Zona", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(20.dp))
-        OutlinedTextField(value = nombre, onValueChange = { nombre = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+        
+        OutlinedTextField(
+            value = nombre, 
+            onValueChange = { 
+                nombre = it
+                alCambiarDatos(it, cultivo)
+            }, 
+            label = { Text("Nombre") }, 
+            modifier = Modifier.fillMaxWidth(), 
+            shape = RoundedCornerShape(16.dp)
+        )
         Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(value = cultivo, onValueChange = { cultivo = it }, label = { Text("Cultivo") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+        
+        OutlinedTextField(
+            value = cultivo, 
+            onValueChange = { 
+                cultivo = it
+                alCambiarDatos(nombre, it)
+            }, 
+            label = { Text("Cultivo") }, 
+            modifier = Modifier.fillMaxWidth(), 
+            shape = RoundedCornerShape(16.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = hectareasCalculadas, 
+                onValueChange = { }, 
+                readOnly = true,
+                label = { Text("Hectáreas") }, 
+                modifier = Modifier.weight(1f), 
+                shape = RoundedCornerShape(16.dp)
+            )
+            
+            Button(
+                onClick = alDibujarEnMapa,
+                modifier = Modifier.weight(1.2f).height(56.dp).bounceClick(),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Icon(Icons.Default.Map, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Redibujar", fontSize = 12.sp)
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
         Button(
-            onClick = { alActualizar(zona.copy(nombre = nombre, cultivo = cultivo)) },
+            onClick = { 
+                alActualizar(zona.copy(
+                    nombre = nombre, 
+                    cultivo = cultivo, 
+                    hectareas = hectareasCalculadas.replace(",", ".").toDoubleOrNull() ?: zona.hectareas,
+                    vertices = viewModel.puntosEdicion.toList(),
+                    ubicacion = if (viewModel.puntosEdicion.isNotEmpty()) viewModel.puntosEdicion.first() else zona.ubicacion
+                )) 
+                viewModel.puntosEdicion.clear()
+            },
+            enabled = nombre.isNotBlank() && cultivo.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(56.dp).bounceClick(),
             shape = RoundedCornerShape(28.dp)
         ) { Text("Actualizar") }
@@ -708,8 +838,8 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
     Configuration.getInstance().userAgentValue = contexto.packageName
 
     Column(modifier = Modifier.fillMaxWidth().padding(24.dp).verticalScroll(rememberScrollState())) {
-        Text(text = zona.nombre, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Text(text = "Cultivo: ${zona.cultivo}", fontSize = 16.sp, color = Color.Gray)
+        Text(text = zona.nombre, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+        Text(text = "Cultivo: ${zona.cultivo}", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(modifier = Modifier.height(24.dp))
         
         Surface(modifier = Modifier.fillMaxWidth().height(220.dp), shape = RoundedCornerShape(24.dp), color = Color.LightGray) {
@@ -719,7 +849,7 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
                         setTileSource(TileSourceFactory.MAPNIK)
                         controller.setZoom(16.0)
                         controller.setCenter(GeoPoint(zona.ubicacion.latitude, zona.ubicacion.longitude))
-                        
+
                         // Si hay vértices guardados, dibujar el polígono real
                         if (zona.vertices.size >= 3) {
                             val poligono = Polygon(this)
@@ -736,14 +866,14 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
                             overlays.add(marcador)
                         }
                     }
-                }, 
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }
         Spacer(modifier = Modifier.height(24.dp))
         val locale = LocalConfiguration.current.locales[0]
-        Text(text = "Superficie: ${String.format(locale, "%.2f", zona.hectareas)} ha", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-        Text(text = "Días para cosecha: ${zona.diasParaCosecha}", fontSize = 16.sp)
+        Text(text = "Superficie: ${String.format(locale, "%.2f", zona.hectareas)} ha", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+        Text(text = "Días para cosecha: ${zona.diasParaCosecha}", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

@@ -7,12 +7,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import android.app.Application
 import com.tecsup.agroscan.data.local.AppDatabase
-import com.tecsup.agroscan.data.local.ZonaEntity
-import com.tecsup.agroscan.data.local.HistorialEntity
 import com.tecsup.agroscan.data.local.toDomain
 import com.tecsup.agroscan.data.local.toEntity
 import com.tecsup.agroscan.Services.WeatherApiService
-import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.maps.model.LatLng
 import com.tecsup.agroscan.data.ResultadoAnalisis
@@ -20,7 +17,6 @@ import com.tecsup.agroscan.data.DatosClima
 import com.tecsup.agroscan.data.InformacionZona
 import com.tecsup.agroscan.data.Usuario
 import com.tecsup.agroscan.network.RoboflowApiService
-import androidx.compose.ui.graphics.Color
 import com.google.maps.android.PolyUtil
 import com.google.maps.android.SphericalUtil
 import kotlinx.coroutines.launch
@@ -95,9 +91,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun obtenerClimaActual(lat: Double, lon: Double) {
+        android.util.Log.d("MainViewModel", "Obteniendo clima para: $lat, $lon")
         viewModelScope.launch {
             try {
-                val response = weatherService.getClima(lat, lon, "0ba1ef3472a03fcf2f7edbc8b5b8e59c") // Reemplazar con real
+                val response = weatherService.getClima(lat, lon, "0ba1ef3472a03fcf2f7edbc8b5b8e59c")
+                android.util.Log.d("MainViewModel", "Respuesta clima: ${response.name}, ${response.main.temp}")
                 datosClimaReales = DatosClima(
                     ubicacion = response.name,
                     temperatura = "${response.main.temp.toInt()}°C",
@@ -108,7 +106,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 ciudadUsuario = response.name
             } catch (e: Exception) {
-                // Manejar error de clima
+                android.util.Log.e("MainViewModel", "Error al obtener clima: ${e.message}")
             }
         }
     }
@@ -159,9 +157,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun actualizarZona(zonaAntigua: InformacionZona, zonaNueva: InformacionZona) {
-        val indice = zonas.indexOf(zonaAntigua)
-        if (indice != -1) {
-            zonas[indice] = zonaNueva
+        viewModelScope.launch {
+            val zonasLocal = agroScanDao.obtenerTodasLasZonas()
+            val entity = zonasLocal.find { it.nombre == zonaAntigua.nombre }
+            if (entity != null) {
+                // Actualizamos la entidad con los nuevos datos pero conservando el mismo ID
+                val nuevaEntity = zonaNueva.toEntity().copy(id = entity.id)
+                agroScanDao.insertarZona(nuevaEntity)
+                
+                // Actualizamos la lista en memoria
+                val indice = zonas.indexOf(zonaAntigua)
+                if (indice != -1) {
+                    zonas[indice] = zonaNueva
+                }
+            }
         }
     }
 

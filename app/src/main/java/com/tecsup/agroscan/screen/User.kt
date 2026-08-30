@@ -27,7 +27,7 @@ import com.tecsup.agroscan.ui.utils.bounceClick
 fun PantallaUsuario(viewModel: MainViewModel) {
     val usuario = viewModel.usuarioActual
     val estadoScroll = rememberScrollState()
-    val verdeOscuro = Color(0xFF2E401F)
+    val verdeOscuro = MaterialTheme.colorScheme.onBackground
 
     Column(
         modifier = Modifier
@@ -121,7 +121,7 @@ fun PantallaUsuario(viewModel: MainViewModel) {
         ) {
             Column {
                 OpcionPerfil(Icons.Outlined.Edit, "Editar Datos Personales")
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp), color = Color(0xFFF2F4F7))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                 OpcionPerfil(Icons.Outlined.Lock, "Cambiar Contraseña")
             }
         }
@@ -194,9 +194,9 @@ fun OpcionPerfil(icono: androidx.compose.ui.graphics.vector.ImageVector, titulo:
             .padding(20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icono, null, tint = Color.Gray)
+        Icon(icono, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(modifier = Modifier.width(16.dp))
-        Text(titulo, modifier = Modifier.weight(1f), fontSize = 15.sp, color = Color(0xFF2E401F))
-        Icon(Icons.Default.ChevronRight, null, tint = Color.LightGray)
+        Text(titulo, modifier = Modifier.weight(1f), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.outline)
     }
 }

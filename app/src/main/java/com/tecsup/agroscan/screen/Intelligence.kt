@@ -116,7 +116,7 @@ fun PantallaIA(viewModel: MainViewModel) {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (viewModel.permisoCamaraConcedido) {
             AndroidView(
                 factory = { vistaPrevia },
@@ -196,7 +196,7 @@ fun PantallaIA(viewModel: MainViewModel) {
                         DropdownMenu(
                             expanded = mostrarSelectorZonas,
                             onDismissRequest = { mostrarSelectorZonas = false },
-                            modifier = Modifier.background(Color.White)
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                         ) {
                             DropdownMenuItem(
                                 text = { Text("Automático (GPS)", color = if(modoAutomaticoGPS) Color(0xFF2E401F) else Color.Unspecified) },
@@ -349,17 +349,17 @@ private fun bitmapABase64(bitmap: Bitmap): String {
 
 @Composable
 fun PanelResultado(resultado: String, alCerrar: () -> Unit) {
-    Surface(shape = RoundedCornerShape(28.dp), color = Color.White, modifier = Modifier.fillMaxWidth(), shadowElevation = 8.dp) {
+    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth(), shadowElevation = 8.dp) {
         Column(modifier = Modifier.padding(24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.AutoAwesome, null, tint = Color(0xFFC0E0A0))
+                Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text("Detección IA", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFF2E401F))
+                Text("Detección IA", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = alCerrar) { Icon(Icons.Default.Close, null) }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Text(resultado, color = Color.DarkGray)
+            Text(resultado, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
