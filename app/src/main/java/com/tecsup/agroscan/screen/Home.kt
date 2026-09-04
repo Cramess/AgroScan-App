@@ -130,8 +130,8 @@ fun PantallaPanelControl(
             shadowElevation = 10.dp
         ) {
             Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
-                val itemsNav = listOf("Inicio", "IA", "Historial", "Perfil")
-                val iconos = listOf(Icons.Default.Home, Icons.Default.AutoAwesome, Icons.Default.History, Icons.Default.Person)
+                val itemsNav = listOf("Inicio", "Escaneo", "Historial", "Perfil")
+                val iconos = listOf(Icons.Default.Home, Icons.Default.CameraAlt, Icons.Default.History, Icons.Default.Person)
                 itemsNav.forEachIndexed { index, item ->
                     val estaSeleccionado = itemSeleccionado == index
                     Column(
