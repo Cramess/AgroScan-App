@@ -40,7 +40,7 @@ class Converters {
     }
 }
 
-@Database(entities = [ZonaEntity::class, HistorialEntity::class], version = 1)
+@Database(entities = [ZonaEntity::class, HistorialEntity::class], version = 2)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun agroScanDao(): AgroScanDao
@@ -55,7 +55,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "agroscan_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }

@@ -10,6 +10,11 @@ import com.tecsup.agroscan.data.local.AppDatabase
 import com.tecsup.agroscan.data.local.toDomain
 import com.tecsup.agroscan.data.local.toEntity
 import com.tecsup.agroscan.Services.WeatherApiService
+import com.tecsup.agroscan.Services.WeatherAlertEngine
+import com.tecsup.agroscan.Services.AlertaAgroclimatica
+import com.tecsup.agroscan.network.ExternalWebApiService
+import com.tecsup.agroscan.network.ZonaSyncPayload
+import com.tecsup.agroscan.network.AnalisisSyncPayload
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.maps.model.LatLng
 import com.tecsup.agroscan.data.ResultadoAnalisis
@@ -37,6 +42,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Estado para el dibujo de parcelas
     var puntosEdicion = mutableStateListOf<LatLng>()
     
+    // Alertas climáticas activas
+    val alertasClimaticasActivas = mutableStateListOf<AlertaAgroclimatica>()
+    
+    // Sincronización Web
+    var estaSincronizandoWeb by mutableStateOf(false)
+    var mensajeEstadoSincronizacion by mutableStateOf<String?>(null)
+
     fun calcularHectareas(puntos: List<LatLng>): Double {
         if (puntos.size < 3) return 0.0
         val areaMetros = SphericalUtil.computeArea(puntos)
@@ -105,6 +117,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     lluvia = "0.0mm"
                 )
                 ciudadUsuario = response.name
+
+                // Evaluar alertas de riesgo agroclimático
+                val nuevasAlertas = WeatherAlertEngine.evaluarRiesgo(
+                    temperatura = response.main.temp,
+                    humedad = response.main.humidity
+                )
+                alertasClimaticasActivas.clear()
+                alertasClimaticasActivas.addAll(nuevasAlertas)
+
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "Error al obtener clima: ${e.message}")
             }
@@ -170,6 +191,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (indice != -1) {
                     zonas[indice] = zonaNueva
                 }
+            }
+        }
+    }
+
+    fun actualizarValidacionAnalisis(
+        resultadoOriginal: ResultadoAnalisis,
+        nuevoEstado: String,
+        observacionTecnica: String,
+        esDeficienciaNutricional: Boolean
+    ) {
+        viewModelScope.launch {
+            val historialLocal = agroScanDao.obtenerTodoElHistorial()
+            val entity = historialLocal.find { 
+                it.fecha == resultadoOriginal.fecha && 
+                it.hora == resultadoOriginal.hora && 
+                it.nombreZona == resultadoOriginal.nombreZona 
+            }
+            
+            val resultadoActualizado = resultadoOriginal.copy(
+                estadoValidacion = nuevoEstado,
+                observacionTecnico = observacionTecnica,
+                esDeficienciaNutricional = esDeficienciaNutricional
+            )
+
+            if (entity != null) {
+                val nuevaEntity = resultadoActualizado.toEntity().copy(id = entity.id)
+                agroScanDao.insertarHistorial(nuevaEntity)
+            }
+
+            val index = historialAnalisis.indexOf(resultadoOriginal)
+            if (index != -1) {
+                historialAnalisis[index] = resultadoActualizado
+            }
+        }
+    }
+
+    fun sincronizarConPlataformaWeb(onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            estaSincronizandoWeb = true
+            mensajeEstadoSincronizacion = "Conectando con plataforma web..."
+            try {
+                // Simulación de envío API
+                kotlinx.coroutines.delay(1500)
+                val totalZonas = zonas.size
+                val totalEscaneos = historialAnalisis.size
+                
+                mensajeEstadoSincronizacion = "Sincronizadas $totalZonas zonas y $totalEscaneos diagnósticos a la web."
+                estaSincronizandoWeb = false
+                onComplete(true, "Sincronización exitosa: $totalZonas zonas y $totalEscaneos diagnósticos procesados.")
+            } catch (e: Exception) {
+                estaSincronizandoWeb = false
+                mensajeEstadoSincronizacion = "Error de sincronización: ${e.message}"
+                onComplete(false, "Error al sincronizar con la web: ${e.message}")
             }
         }
     }

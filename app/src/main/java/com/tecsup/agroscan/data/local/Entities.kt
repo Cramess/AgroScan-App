@@ -24,12 +24,17 @@ data class ZonaEntity(
     val observaciones: String,
     val estadoCultivo: String,
     val uriFoto: String?,
-    val verticesJson: String // Serializado para Room
+    val verticesJson: String, // Serializado para Room
+    val tipoSuelo: String = "Franco-Arcilloso",
+    val phSuelo: Double = 6.8,
+    val nivelNitrogeno: String = "Medio",
+    val nivelFosforo: String = "Medio",
+    val nivelPotasio: String = "Medio"
 )
 
 fun ZonaEntity.toDomain(): InformacionZona {
     val listType = object : TypeToken<List<LatLng>>() {}.type
-    val vertices: List<LatLng> = Gson().fromJson(verticesJson, listType)
+    val vertices: List<LatLng> = Gson().fromJson(verticesJson, listType) ?: emptyList()
     return InformacionZona(
         nombre = nombre,
         cultivo = cultivo,
@@ -41,7 +46,12 @@ fun ZonaEntity.toDomain(): InformacionZona {
         observaciones = observaciones,
         estadoCultivo = estadoCultivo,
         uriFoto = uriFoto,
-        vertices = vertices
+        vertices = vertices,
+        tipoSuelo = tipoSuelo,
+        phSuelo = phSuelo,
+        nivelNitrogeno = nivelNitrogeno,
+        nivelFosforo = nivelFosforo,
+        nivelPotasio = nivelPotasio
     )
 }
 
@@ -58,7 +68,12 @@ fun InformacionZona.toEntity(): ZonaEntity {
         observaciones = observaciones,
         estadoCultivo = estadoCultivo,
         uriFoto = uriFoto,
-        verticesJson = Gson().toJson(vertices)
+        verticesJson = Gson().toJson(vertices),
+        tipoSuelo = tipoSuelo,
+        phSuelo = phSuelo,
+        nivelNitrogeno = nivelNitrogeno,
+        nivelFosforo = nivelFosforo,
+        nivelPotasio = nivelPotasio
     )
 }
 
@@ -76,7 +91,10 @@ data class HistorialEntity(
     val temperatura: String,
     val humedad: String,
     val radiacionUV: String,
-    val resumen: String
+    val resumen: String,
+    val estadoValidacion: String = "PENDIENTE",
+    val observacionTecnico: String = "",
+    val esDeficienciaNutricional: Boolean = false
 )
 
 fun HistorialEntity.toDomain(): ResultadoAnalisis {
@@ -92,7 +110,10 @@ fun HistorialEntity.toDomain(): ResultadoAnalisis {
         temperatura = temperatura,
         humedad = humedad,
         radiacionUV = radiacionUV,
-        resumen = resumen
+        resumen = resumen,
+        estadoValidacion = estadoValidacion,
+        observacionTecnico = observacionTecnico,
+        esDeficienciaNutricional = esDeficienciaNutricional
     )
 }
 
@@ -109,6 +130,9 @@ fun ResultadoAnalisis.toEntity(): HistorialEntity {
         temperatura = temperatura,
         humedad = humedad,
         radiacionUV = radiacionUV,
-        resumen = resumen
+        resumen = resumen,
+        estadoValidacion = estadoValidacion,
+        observacionTecnico = observacionTecnico,
+        esDeficienciaNutricional = esDeficienciaNutricional
     )
 }

@@ -28,6 +28,8 @@ fun PantallaHistorial(viewModel: MainViewModel) {
     var consultaBusqueda by remember { mutableStateOf("") }
     val zonasExpandidas = remember { mutableStateMapOf<String, Boolean>() }
 
+    var analisisParaValidar by remember { mutableStateOf<ResultadoAnalisis?>(null) }
+
     val historialFiltrado = remember(consultaBusqueda, viewModel.historialAnalisis.size) {
         if (consultaBusqueda.isEmpty()) {
             viewModel.historialAnalisis
@@ -110,7 +112,10 @@ fun PantallaHistorial(viewModel: MainViewModel) {
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 analisisEnZona.forEach { analisis ->
-                                    TarjetaHistorialCompacta(analisis)
+                                    TarjetaHistorialCompacta(
+                                        analisis = analisis,
+                                        alEditarValidacion = { analisisParaValidar = analisis }
+                                    )
                                 }
                             }
                         }
@@ -118,7 +123,87 @@ fun PantallaHistorial(viewModel: MainViewModel) {
                 }
             }
         }
+
+        // --- DIÁLOGO DE VALIDACIÓN HÍBRIDA (HUMANO EN EL BUCLE) ---
+        analisisParaValidar?.let { analisis ->
+            DialogoValidacionHumana(
+                analisis = analisis,
+                alGuardar = { estado, obs, esNutricional ->
+                    viewModel.actualizarValidacionAnalisis(analisis, estado, obs, esNutricional)
+                    analisisParaValidar = null
+                },
+                alCancelar = { analisisParaValidar = null }
+            )
+        }
     }
+}
+
+@Composable
+fun DialogoValidacionHumana(
+    analisis: ResultadoAnalisis,
+    alGuardar: (String, String, Boolean) -> Unit,
+    alCancelar: () -> Unit
+) {
+    var estadoSeleccionado by remember { mutableStateOf(analisis.estadoValidacion) }
+    var observacion by remember { mutableStateOf(analisis.observacionTecnico) }
+    var esNutricional by remember { mutableStateOf(analisis.esDeficienciaNutricional) }
+
+    AlertDialog(
+        onDismissRequest = alCancelar,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text("Validación Técnica / Agrónomo", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+        text = {
+            Column {
+                Text("Planta: ${analisis.nombrePlanta} • Zona: ${analisis.nombreZona}", fontSize = 13.sp, color = Color.Gray)
+                Text("Diagnóstico IA: ${analisis.descripcion}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("Estado de Validación:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = estadoSeleccionado == "VALIDADO_OK",
+                        onClick = { estadoSeleccionado = "VALIDADO_OK" },
+                        label = { Text("Validado OK", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = estadoSeleccionado == "CORREGIDO_AGRONOMO",
+                        onClick = { estadoSeleccionado = "CORREGIDO_AGRONOMO" },
+                        label = { Text("Corregido", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = estadoSeleccionado == "PENDIENTE",
+                        onClick = { estadoSeleccionado = "PENDIENTE" },
+                        label = { Text("Pendiente", fontSize = 11.sp) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = esNutricional, onCheckedChange = { esNutricional = it })
+                    Text("Es deficiencia nutricional (NPK)", fontSize = 12.sp)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = observacion,
+                    onValueChange = { observacion = it },
+                    label = { Text("Observación Técnica") },
+                    placeholder = { Text("Escriba notas o acciones correctivas...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { alGuardar(estadoSeleccionado, observacion, esNutricional) }) {
+                Text("Guardar Validación")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = alCancelar) { Text("Cancelar") }
+        }
+    )
 }
 
 @Composable
@@ -166,15 +251,21 @@ fun TarjetaZonaHistorial(
 }
 
 @Composable
-fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis) {
+fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis, alEditarValidacion: () -> Unit = {}) {
     val colorIndicador = Color(analisis.valorColor)
     val colorTexto = MaterialTheme.colorScheme.onSurface
     
+    val (badgeTexto, badgeColor) = when(analisis.estadoValidacion) {
+        "VALIDADO_OK" -> "Validado OK" to Color(0xFF2ECC71)
+        "CORREGIDO_AGRONOMO" -> "Corregido Agrónomo" to Color(0xFFE67E22)
+        else -> "Pendiente Validación" to Color(0xFFF1C40F)
+    }
+
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)),
-        modifier = Modifier.fillMaxWidth().bounceClick()
+        modifier = Modifier.fillMaxWidth().bounceClick().clickable { alEditarValidacion() }
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -191,11 +282,19 @@ fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis) {
                     color = colorTexto,
                     modifier = Modifier.weight(1f)
                 )
-                Text(
-                    text = "${analisis.fecha} • ${analisis.hora}", 
-                    fontSize = 11.sp, 
-                    color = colorTexto.copy(alpha = 0.5f)
-                )
+                
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = badgeColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = badgeTexto,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -208,6 +307,16 @@ fun TarjetaHistorialCompacta(analisis: ResultadoAnalisis) {
                 ItemTecnicoHistorial(Icons.Default.WaterDrop, analisis.humedad)
                 ItemTecnicoHistorial(Icons.Default.WbSunny, analisis.radiacionUV)
                 ItemTecnicoHistorial(Icons.Default.CheckCircle, analisis.descripcion, colorIndicador)
+            }
+
+            if (analisis.observacionTecnico.isNotBlank() || analisis.esDeficienciaNutricional) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Nota Técnico: ${analisis.observacionTecnico}${if(analisis.esDeficienciaNutricional) " [Deficiencia Nutricional NPK]" else ""}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }

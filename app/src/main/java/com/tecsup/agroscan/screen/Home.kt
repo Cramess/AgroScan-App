@@ -93,6 +93,7 @@ fun PantallaPanelControl(
                 ) { targetIndex ->
                     when (targetIndex) {
                         0 -> ContenidoPrincipalPanelControl(
+                            viewModel = viewModel,
                             zonas = viewModel.zonas,
                             datosClimaReales = viewModel.datosClimaReales,
                             alHacerClicEnZona = {
@@ -462,6 +463,7 @@ fun DialogoConfirmacionEliminar(
 
 @Composable
 fun ContenidoPrincipalPanelControl(
+    viewModel: MainViewModel,
     zonas: List<InformacionZona>,
     datosClimaReales: DatosClima? = null,
     alHacerClicEnZona: (InformacionZona) -> Unit,
@@ -473,6 +475,7 @@ fun ContenidoPrincipalPanelControl(
     val proximaZonaCosecha = zonas.filter { it.diasParaCosecha <= 30 }.minByOrNull { it.diasParaCosecha }
     val colorTexto = MaterialTheme.colorScheme.onBackground
     val locale = LocalConfiguration.current.locales[0]
+    val contexto = LocalContext.current
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         Spacer(modifier = Modifier.height(32.dp))
@@ -498,6 +501,40 @@ fun ContenidoPrincipalPanelControl(
             }
         }
         
+        // --- SECCIÓN DE ALERTAS AGROCLIMÁTICAS TEMPRANAS ---
+        if (viewModel.alertasClimaticasActivas.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Alertas Agroclimáticas Activas", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+            Spacer(modifier = Modifier.height(8.dp))
+            viewModel.alertasClimaticasActivas.forEach { alerta ->
+                TarjetaAlerta(
+                    titulo = "${alerta.titulo} (${alerta.patogenoAsociado})",
+                    subtitulo = "${alerta.descripcion}\nRecomendación: ${alerta.recomendaciones}",
+                    icono = Icons.Default.Thunderstorm,
+                    colorContenedor = Color(0xFFFDE8E8),
+                    colorContenido = Color(0xFF9B1C1C)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+        
+        // --- BOTÓN DE SINCRONIZACIÓN WEB ---
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = {
+                viewModel.sincronizarConPlataformaWeb { exito, msg ->
+                    android.widget.Toast.makeText(contexto, msg, android.widget.Toast.LENGTH_LONG).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp).bounceClick(),
+            shape = RoundedCornerShape(24.dp),
+            enabled = !viewModel.estaSincronizandoWeb
+        ) {
+            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(if (viewModel.estaSincronizandoWeb) "Sincronizando con Web..." else "Sincronizar Datos a App Web", fontSize = 13.sp)
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
         
         proximaZonaCosecha?.let { zona ->
@@ -662,6 +699,12 @@ fun FormularioAgregarZona(
 ) {
     var nombre by remember(nombreInicial) { mutableStateOf(nombreInicial) }
     var cultivo by remember(cultivoInicial) { mutableStateOf(cultivoInicial) }
+    var tipoSuelo by remember { mutableStateOf("Franco-Arcilloso") }
+    var phSuelo by remember { mutableStateOf("6.8") }
+    var nivelN by remember { mutableStateOf("Medio") }
+    var nivelP by remember { mutableStateOf("Medio") }
+    var nivelK by remember { mutableStateOf("Medio") }
+
     val locale = LocalConfiguration.current.locales[0]
     
     val hectareasCalculadas = if (viewModel.puntosEdicion.isNotEmpty()) 
@@ -721,6 +764,34 @@ fun FormularioAgregarZona(
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("Caracterización de Suelo y Nutrientes (NPK)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = tipoSuelo,
+                onValueChange = { tipoSuelo = it },
+                label = { Text("Tipo Suelo") },
+                modifier = Modifier.weight(1.5f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            OutlinedTextField(
+                value = phSuelo,
+                onValueChange = { phSuelo = it },
+                label = { Text("pH") },
+                modifier = Modifier.weight(0.8f),
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(value = nivelN, onValueChange = { nivelN = it }, label = { Text("Nitrógeno (N)") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp))
+            OutlinedTextField(value = nivelP, onValueChange = { nivelP = it }, label = { Text("Fósforo (P)") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp))
+            OutlinedTextField(value = nivelK, onValueChange = { nivelK = it }, label = { Text("Potasio (K)") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp))
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
         Button(
             onClick = { 
@@ -731,7 +802,12 @@ fun FormularioAgregarZona(
                     diasParaCosecha = 30, 
                     ubicacion = if (viewModel.puntosEdicion.isNotEmpty()) viewModel.puntosEdicion.first() else LatLng(-12.0, -77.0), 
                     hectareas = hectareasCalculadas.replace(",", ".").toDoubleOrNull() ?: 0.0,
-                    vertices = viewModel.puntosEdicion.toList()
+                    vertices = viewModel.puntosEdicion.toList(),
+                    tipoSuelo = tipoSuelo,
+                    phSuelo = phSuelo.toDoubleOrNull() ?: 6.8,
+                    nivelNitrogeno = nivelN,
+                    nivelFosforo = nivelP,
+                    nivelPotasio = nivelK
                 )) 
                 viewModel.puntosEdicion.clear()
             },
@@ -874,6 +950,21 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
         val locale = LocalConfiguration.current.locales[0]
         Text(text = "Superficie: ${String.format(locale, "%.2f", zona.hectareas)} ha", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
         Text(text = "Días para cosecha: ${zona.diasParaCosecha}", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Caracterización de Suelo & NPK", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("• Tipo de Suelo: ${zona.tipoSuelo}", fontSize = 13.sp)
+                Text("• pH del Suelo: ${zona.phSuelo}", fontSize = 13.sp)
+                Text("• Nitrógeno (N): ${zona.nivelNitrogeno} | Fósforo (P): ${zona.nivelFosforo} | Potasio (K): ${zona.nivelPotasio}", fontSize = 13.sp)
+            }
+        }
     }
 }
 

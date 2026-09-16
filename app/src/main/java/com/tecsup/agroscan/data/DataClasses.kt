@@ -14,7 +14,12 @@ data class InformacionZona(
     val observaciones: String = "",
     val estadoCultivo: String = "Pendiente",
     val uriFoto: String? = null,
-    val vertices: List<LatLng> = emptyList() // Nuevos datos para el polígono
+    val vertices: List<LatLng> = emptyList(), // Nuevos datos para el polígono
+    val tipoSuelo: String = "Franco-Arcilloso",
+    val phSuelo: Double = 6.8,
+    val nivelNitrogeno: String = "Medio",
+    val nivelFosforo: String = "Medio",
+    val nivelPotasio: String = "Medio"
 )
 
 data class DatosClima(
@@ -38,7 +43,10 @@ data class ResultadoAnalisis(
     val temperatura: String,
     val humedad: String,
     val radiacionUV: String, // Nuevo campo
-    val resumen: String
+    val resumen: String,
+    val estadoValidacion: String = "PENDIENTE", // PENDIENTE, VALIDADO_OK, CORREGIDO_AGRONOMO
+    val observacionTecnico: String = "",
+    val esDeficienciaNutricional: Boolean = false
 )
 
 data class Usuario(
