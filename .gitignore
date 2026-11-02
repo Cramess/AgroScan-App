@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Modelo de IA local (36 MB): se copia a mano en app/src/main/assets/
+app/src/main/assets/*.tflite
