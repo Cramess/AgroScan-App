@@ -22,6 +22,9 @@ import androidx.compose.ui.unit.sp
 import com.tecsup.agroscan.viewmodel.MainViewModel
 import com.tecsup.agroscan.data.ResultadoAnalisis
 import com.tecsup.agroscan.ui.utils.bounceClick
+import com.tecsup.agroscan.ui.utils.aparicion
+import com.tecsup.agroscan.ui.utils.CurvaSuave
+import com.tecsup.agroscan.ui.utils.LocalAnimaciones
 
 @Composable
 fun PantallaHistorial(viewModel: MainViewModel) {
@@ -43,6 +46,7 @@ fun PantallaHistorial(viewModel: MainViewModel) {
     }
 
     val historialAgrupado = historialFiltrado.groupBy { it.nombreZona }
+    val animaciones = LocalAnimaciones.current
 
     Column(
         modifier = Modifier
@@ -90,32 +94,36 @@ fun PantallaHistorial(viewModel: MainViewModel) {
                 contentPadding = PaddingValues(bottom = 140.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                historialAgrupado.forEach { (zona, analisisEnZona) ->
+                historialAgrupado.entries.forEachIndexed { indiceZona, (zona, analisisEnZona) ->
                     item {
                         val estaExpandido = zonasExpandidas[zona] ?: false
-                        TarjetaZonaHistorial(
-                            nombreZona = zona,
-                            cantidadAnalisis = analisisEnZona.size,
-                            estaExpandido = estaExpandido,
-                            onClick = { zonasExpandidas[zona] = !estaExpandido }
-                        )
+                        Box(Modifier.aparicion(indiceZona)) {
+                            TarjetaZonaHistorial(
+                                nombreZona = zona,
+                                cantidadAnalisis = analisisEnZona.size,
+                                estaExpandido = estaExpandido,
+                                onClick = { zonasExpandidas[zona] = !estaExpandido }
+                            )
+                        }
                     }
-                    
+
                     item {
                         AnimatedVisibility(
                             visible = zonasExpandidas[zona] ?: false,
-                            enter = expandVertically(animationSpec = tween(400)) + fadeIn(),
-                            exit = shrinkVertically(animationSpec = tween(400)) + fadeOut()
+                            enter = if (animaciones) expandVertically(tween(420, easing = CurvaSuave)) + fadeIn(tween(300, 120)) else EnterTransition.None,
+                            exit = if (animaciones) shrinkVertically(tween(320, easing = CurvaSuave)) + fadeOut(tween(160)) else ExitTransition.None
                         ) {
                             Column(
                                 modifier = Modifier.padding(start = 8.dp, top = 8.dp, bottom = 16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                analisisEnZona.forEach { analisis ->
-                                    TarjetaHistorialCompacta(
-                                        analisis = analisis,
-                                        alEditarValidacion = { analisisParaValidar = analisis }
-                                    )
+                                analisisEnZona.forEachIndexed { i, analisis ->
+                                    Box(Modifier.aparicion(i)) {
+                                        TarjetaHistorialCompacta(
+                                            analisis = analisis,
+                                            alEditarValidacion = { analisisParaValidar = analisis }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -124,7 +132,7 @@ fun PantallaHistorial(viewModel: MainViewModel) {
             }
         }
 
-        // --- DIÁLOGO DE VALIDACIÓN HÍBRIDA (HUMANO EN EL BUCLE) ---
+        // Validación híbrida: el técnico confirma o corrige el diagnóstico de la IA
         analisisParaValidar?.let { analisis ->
             DialogoValidacionHumana(
                 analisis = analisis,

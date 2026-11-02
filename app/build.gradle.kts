@@ -1,9 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.kotlin.android)
 }
+
+// Las API keys viven en local.properties (ignorado por git) y llegan al código vía BuildConfig
+val propiedadesLocales = Properties().apply {
+    val archivo = rootProject.file("local.properties")
+    if (archivo.exists()) archivo.inputStream().use { load(it) }
+}
+fun claveLocal(nombre: String): String = propiedadesLocales.getProperty(nombre, "")
 
 android {
     namespace = "com.tecsup.agroscan"
@@ -17,6 +26,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "ROBOFLOW_API_KEY", "\"${claveLocal("ROBOFLOW_API_KEY")}\"")
+        buildConfigField("String", "OPENWEATHER_API_KEY", "\"${claveLocal("OPENWEATHER_API_KEY")}\"")
     }
 
     buildTypes {
@@ -30,6 +42,11 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+    androidResources {
+        // El modelo TFLite se mapea en memoria desde assets: no debe comprimirse
+        noCompress += "tflite"
     }
     kotlinOptions {
         jvmTarget = "11"
@@ -66,6 +83,13 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+
+    // LiteRT (TFLite) para el modelo YOLO11 local
+    implementation(libs.litert)
+
+    // Jetpack Glance (App Widgets)
+    implementation("androidx.glance:glance-appwidget:1.2.0")
+    implementation("androidx.glance:glance-material3:1.2.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

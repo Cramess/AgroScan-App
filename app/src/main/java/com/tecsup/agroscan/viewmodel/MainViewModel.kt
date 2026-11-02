@@ -22,13 +22,78 @@ import com.tecsup.agroscan.data.DatosClima
 import com.tecsup.agroscan.data.InformacionZona
 import com.tecsup.agroscan.data.Usuario
 import com.tecsup.agroscan.network.RoboflowApiService
+import com.tecsup.agroscan.BuildConfig
+import com.tecsup.agroscan.widget.AgroScanWidget
+import com.tecsup.agroscan.widget.PREFS_WIDGET
+import com.tecsup.agroscan.widget.PREF_CLIMA_ALERTA
+import com.tecsup.agroscan.widget.PREF_CLIMA_HUMEDAD
+import com.tecsup.agroscan.widget.PREF_CLIMA_TEMPERATURA
+import androidx.glance.appwidget.updateAll
+import android.content.Context
+import com.tecsup.agroscan.data.ValidacionCuenta
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.tecsup.agroscan.ml.CatalogoEnfermedades
+import com.tecsup.agroscan.ml.DetectorLocal
+import com.tecsup.agroscan.ml.Enfermedad
+import com.tecsup.agroscan.ml.bitmapABase64
+import com.tecsup.agroscan.ml.decodificarConRotacion
+import android.graphics.Bitmap
 import com.google.maps.android.PolyUtil
 import com.google.maps.android.SphericalUtil
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.text.SimpleDateFormat
 import java.util.*
+
+enum class ModoDeteccion(val etiqueta: String) {
+    AUTOMATICO("Automático"), // Roboflow y, si falla (sin internet), modelo local
+    NUBE("Nube"),
+    LOCAL("Local")
+}
+
+private data class Diagnostico(val clase: String, val confianza: Float, val origen: String)
+
+/** Cuenta guardada en el teléfono; la contraseña solo se conserva como hash SHA-256 con sal. */
+private data class CuentaLocal(
+    val nombre: String,
+    val correo: String,
+    val rol: String,
+    val sal: String,
+    val hash: String,
+    val correoAdministrador: String? = null   // a quién escribir consultas u observaciones
+)
+
+const val ROL_TECNICO = "TÉCNICO AGRÓNOMO"
+
+private const val PREF_ANIMACIONES = "animaciones"
+
+private const val SESION_ACTIVA = "sesion_activa"
+private const val SESION_CUENTAS = "cuentas"
+private const val SESION_CORREO_ACTIVO = "correo_activo"
+// Claves de la versión con una sola cuenta (solo se leen para migrar)
+private const val SESION_NOMBRE = "nombre"
+private const val SESION_CORREO = "correo"
+private const val SESION_ROL = "rol"
+private const val SESION_SAL = "sal"
+private const val SESION_HASH = "hash_contrasena"
+
+/** Resultado de un escaneo listo para mostrar; [enfermedad] es null cuando solo hay un mensaje (sin detección o error). */
+data class ResultadoEscaneo(
+    val enfermedad: Enfermedad?,
+    val porcentaje: Int = 0,
+    val etiquetaModelo: String = "",
+    val origen: String = "",
+    val mensaje: String? = null
+) {
+    companion object {
+        fun mensaje(texto: String) = ResultadoEscaneo(enfermedad = null, mensaje = texto)
+    }
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getDatabase(application)
@@ -40,13 +105,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var permisoCamaraConcedido by mutableStateOf(false)
     var ciudadUsuario by mutableStateOf("Lima, Perú")
 
-    // Estado para el dibujo de parcelas
     var puntosEdicion = mutableStateListOf<LatLng>()
     
-    // Alertas climáticas activas
     val alertasClimaticasActivas = mutableStateListOf<AlertaAgroclimatica>()
     
-    // Sincronización Web
     var estaSincronizandoWeb by mutableStateOf(false)
     var mensajeEstadoSincronizacion by mutableStateOf<String?>(null)
 
@@ -56,9 +118,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return areaMetros / 10000.0
     }
 
-    /**
-     * Detecta si una ubicación está dentro de los límites de alguna zona guardada.
-     */
     fun detectarZonaPorUbicacion(ubicacion: LatLng): InformacionZona? {
         return zonas.find { zona ->
             zona.vertices.size >= 3 && PolyUtil.containsLocation(ubicacion, zona.vertices, true)
@@ -73,12 +132,160 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         permisoUbicacionConcedido = concedido
     }
     
-    // Perfil de Usuario
-    var usuarioActual by mutableStateOf<Usuario?>(
-        Usuario("Cristian", "cristian@agroscan.com", "ADMINISTRADOR")
-    )
+    // Perfil de Usuario: cuenta local guardada en el teléfono (no hay servidor de autenticación)
+    private val prefsSesion = application.getSharedPreferences("agroscan_sesion", Context.MODE_PRIVATE)
+
+    var usuarioActual by mutableStateOf(run {
+        migrarCuentaAntigua()
+        cargarSesion()
+    })
+
+    private fun leerCuentas(): List<CuentaLocal> {
+        val json = prefsSesion.getString(SESION_CUENTAS, null) ?: return emptyList()
+        val tipo = object : TypeToken<List<CuentaLocal>>() {}.type
+        return Gson().fromJson<List<CuentaLocal>>(json, tipo) ?: emptyList()
+    }
+
+    private fun guardarCuentas(cuentas: List<CuentaLocal>) {
+        prefsSesion.edit().putString(SESION_CUENTAS, Gson().toJson(cuentas)).apply()
+    }
+
+    // Versiones anteriores guardaban una sola cuenta en claves sueltas; se pasa a la lista de cuentas
+    private fun migrarCuentaAntigua() {
+        if (prefsSesion.contains(SESION_CUENTAS)) return
+        val correo = prefsSesion.getString(SESION_CORREO, null) ?: return
+        val cuenta = CuentaLocal(
+            nombre = prefsSesion.getString(SESION_NOMBRE, "").orEmpty(),
+            correo = correo,
+            rol = prefsSesion.getString(SESION_ROL, "ADMINISTRADOR").orEmpty(),
+            sal = prefsSesion.getString(SESION_SAL, "").orEmpty(),
+            hash = prefsSesion.getString(SESION_HASH, "").orEmpty()
+        )
+        guardarCuentas(listOf(cuenta))
+        prefsSesion.edit()
+            .putString(SESION_CORREO_ACTIVO, correo)
+            .remove(SESION_NOMBRE).remove(SESION_CORREO).remove(SESION_ROL).remove(SESION_SAL).remove(SESION_HASH)
+            .apply()
+    }
+
+    private fun cargarSesion(): Usuario? {
+        if (!prefsSesion.getBoolean(SESION_ACTIVA, false)) return null
+        val correo = prefsSesion.getString(SESION_CORREO_ACTIVO, null) ?: return null
+        val cuenta = leerCuentas().find { it.correo == correo } ?: return null
+        return Usuario(nombre = cuenta.nombre, email = cuenta.correo, rol = cuenta.rol)
+    }
+
+    private fun abrirSesion(correo: String) {
+        prefsSesion.edit().putString(SESION_CORREO_ACTIVO, correo).putBoolean(SESION_ACTIVA, true).apply()
+        usuarioActual = cargarSesion()
+    }
+
+    /**
+     * Crea una cuenta de técnico agrónomo (el usuario principal de la app) con correo corporativo y abre su sesión.
+     * Devuelve un mensaje de error o null si todo fue bien.
+     */
+    fun registrarCuenta(nombre: String, correo: String, contrasena: String, confirmacion: String): String? {
+        ValidacionCuenta.validarRegistro(nombre, correo, contrasena, confirmacion)?.let { return it }
+        val correoLimpio = ValidacionCuenta.normalizar(correo)
+        val cuentas = leerCuentas()
+        if (cuentas.any { it.correo == correoLimpio }) return "Ya existe una cuenta con ese correo"
+
+        val sal = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        val nueva = CuentaLocal(
+            nombre = nombre.trim(),
+            correo = correoLimpio,
+            rol = ROL_TECNICO,
+            sal = android.util.Base64.encodeToString(sal, android.util.Base64.NO_WRAP),
+            hash = hashContrasena(contrasena, sal)
+        )
+        guardarCuentas(cuentas + nueva)
+        abrirSesion(correoLimpio)
+        return null
+    }
+
+    /** Valida las credenciales contra las cuentas del teléfono. Devuelve un mensaje de error o null si todo fue bien. */
+    fun iniciarSesion(correo: String, contrasena: String): String? {
+        val cuenta = leerCuentas().find { it.correo == ValidacionCuenta.normalizar(correo) }
+            ?: return "No hay una cuenta con ese correo. Toque «Crear cuenta»."
+        val sal = android.util.Base64.decode(cuenta.sal, android.util.Base64.NO_WRAP)
+        if (hashContrasena(contrasena, sal) != cuenta.hash) return "Correo o contraseña incorrectos"
+
+        abrirSesion(cuenta.correo)
+        return null
+    }
+
+    private fun cuentaActiva(): CuentaLocal? {
+        val correo = prefsSesion.getString(SESION_CORREO_ACTIVO, null) ?: return null
+        return leerCuentas().find { it.correo == correo }
+    }
+
+    private fun reemplazarCuentaActiva(nueva: CuentaLocal) {
+        val actual = cuentaActiva() ?: return
+        guardarCuentas(leerCuentas().map { if (it.correo == actual.correo) nueva else it })
+        abrirSesion(nueva.correo)
+    }
+
+    /** Cambia nombre y correo de la cuenta activa. Devuelve un mensaje de error o null si todo fue bien. */
+    fun actualizarDatos(nombre: String, correo: String): String? {
+        val actual = cuentaActiva() ?: return "No hay una sesión activa"
+        val correoLimpio = ValidacionCuenta.normalizar(correo)
+        when {
+            nombre.isBlank() -> return "Ingrese su nombre completo"
+            !ValidacionCuenta.esCorreoValido(correoLimpio) -> return "Correo electrónico no válido"
+        }
+        if (correoLimpio != actual.correo) {
+            if (!ValidacionCuenta.esCorreoCorporativo(correoLimpio)) {
+                return "Use un correo corporativo (no Gmail, Hotmail, Outlook u otro personal)"
+            }
+            if (leerCuentas().any { it.correo == correoLimpio }) return "Ya existe una cuenta con ese correo"
+        }
+        reemplazarCuentaActiva(actual.copy(nombre = nombre.trim(), correo = correoLimpio))
+        return null
+    }
+
+    /** Cambia la contraseña verificando la actual. Devuelve un mensaje de error o null si todo fue bien. */
+    fun cambiarContrasena(actual: String, nueva: String, confirmacion: String): String? {
+        val cuenta = cuentaActiva() ?: return "No hay una sesión activa"
+        val salActual = android.util.Base64.decode(cuenta.sal, android.util.Base64.NO_WRAP)
+        when {
+            hashContrasena(actual, salActual) != cuenta.hash -> return "La contraseña actual no es correcta"
+            nueva.length < 6 -> return "La nueva contraseña debe tener al menos 6 caracteres"
+            nueva != confirmacion -> return "Las contraseñas no coinciden"
+            nueva == actual -> return "La nueva contraseña debe ser distinta de la actual"
+        }
+        val sal = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        reemplazarCuentaActiva(
+            cuenta.copy(
+                sal = android.util.Base64.encodeToString(sal, android.util.Base64.NO_WRAP),
+                hash = hashContrasena(nueva, sal)
+            )
+        )
+        return null
+    }
+
+    /** Correo guardado del administrador o, si aún no hay, una sugerencia con el dominio de la empresa. */
+    fun correoAdministrador(): String {
+        val cuenta = cuentaActiva() ?: return ""
+        cuenta.correoAdministrador?.let { return it }
+        val dominio = cuenta.correo.substringAfter("@", "")
+        return if (ValidacionCuenta.esCorreoCorporativo(cuenta.correo)) "administrador@$dominio" else ""
+    }
+
+    fun guardarCorreoAdministrador(correo: String): String? {
+        val cuenta = cuentaActiva() ?: return "No hay una sesión activa"
+        val limpio = ValidacionCuenta.normalizar(correo)
+        if (!ValidacionCuenta.esCorreoValido(limpio)) return "Correo del administrador no válido"
+        reemplazarCuentaActiva(cuenta.copy(correoAdministrador = limpio))
+        return null
+    }
+
+    private fun hashContrasena(contrasena: String, sal: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update(sal)
+        val hash = digest.digest(contrasena.toByteArray(Charsets.UTF_8))
+        return android.util.Base64.encodeToString(hash, android.util.Base64.NO_WRAP)
+    }
     
-    // Configuración de Tema
     var modoOscuroHabilitado by mutableStateOf(false)
 
     val zonas = mutableStateListOf<InformacionZona>()
@@ -107,7 +314,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         android.util.Log.d("MainViewModel", "Obteniendo clima para: $lat, $lon")
         viewModelScope.launch {
             try {
-                val response = weatherService.getClima(lat, lon, "0ba1ef3472a03fcf2f7edbc8b5b8e59c")
+                val response = weatherService.getClima(lat, lon, BuildConfig.OPENWEATHER_API_KEY)
                 android.util.Log.d("MainViewModel", "Respuesta clima: ${response.name}, ${response.main.temp}")
                 datosClimaReales = DatosClima(
                     ubicacion = response.name,
@@ -119,13 +326,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 ciudadUsuario = response.name
 
-                // Evaluar alertas de riesgo agroclimático
                 val nuevasAlertas = WeatherAlertEngine.evaluarRiesgo(
                     temperatura = response.main.temp,
                     humedad = response.main.humidity
                 )
                 alertasClimaticasActivas.clear()
                 alertasClimaticasActivas.addAll(nuevasAlertas)
+
+                // El widget no consulta la API: se le deja el último clima conocido
+                getApplication<Application>().getSharedPreferences(PREFS_WIDGET, Context.MODE_PRIVATE).edit()
+                    .putString(PREF_CLIMA_TEMPERATURA, datosClimaReales?.temperatura)
+                    .putString(PREF_CLIMA_HUMEDAD, datosClimaReales?.humedad)
+                    .putString(PREF_CLIMA_ALERTA, nuevasAlertas.firstOrNull()?.titulo)
+                    .apply()
+                refrescarWidget()
 
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "Error al obtener clima: ${e.message}")
@@ -135,12 +349,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val apiService = RoboflowApiService.create()
 
+    // Detección de enfermedades: Roboflow (nube) y YOLO11 con LiteRT (local)
+    var modoDeteccion by mutableStateOf(ModoDeteccion.AUTOMATICO)
+
+    private val detectorLocalPerezoso = lazy<DetectorLocal?> {
+        try {
+            DetectorLocal(getApplication())
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "No se pudo cargar el modelo local: ${e.message}")
+            null
+        }
+    }
+    private val detectorLocal by detectorLocalPerezoso
+
+    private fun refrescarWidget() {
+        viewModelScope.launch {
+            try {
+                AgroScanWidget().updateAll(getApplication())
+            } catch (e: Exception) {
+                android.util.Log.w("MainViewModel", "No se pudo actualizar el widget: ${e.message}")
+            }
+        }
+    }
+
+    fun alternarModoDeteccion() {
+        val modos = ModoDeteccion.entries
+        modoDeteccion = modos[(modoDeteccion.ordinal + 1) % modos.size]
+    }
+
+    override fun onCleared() {
+        if (detectorLocalPerezoso.isInitialized()) detectorLocalPerezoso.value?.close()
+        super.onCleared()
+    }
+
     fun agregarZona(zona: InformacionZona) {
         viewModelScope.launch {
             agroScanDao.insertarZona(zona.toEntity())
             zonas.add(zona)
             
-            // Crear entrada inicial en el historial
+            // Cada zona nueva deja un registro en el historial para que aparezca agrupada ahí
             val sdfFecha = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
             val sdfHora = SimpleDateFormat("HH:mm", Locale.getDefault())
             val ahora = Date()
@@ -150,7 +397,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 nombrePlanta = zona.cultivo,
                 nombreZona = zona.nombre,
                 descripcion = "Zona recién añadida",
-                valorColor = 0xFF9E9E9E, // Gris neutro
+                valorColor = 0xFF9E9E9E,
                 fecha = sdfFecha.format(ahora),
                 hora = sdfHora.format(ahora),
                 ubicacion = ciudadUsuario,
@@ -162,6 +409,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             
             agroScanDao.insertarHistorial(resultado.toEntity())
             historialAnalisis.add(0, resultado)
+            refrescarWidget()
         }
     }
 
@@ -174,6 +422,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 agroScanDao.eliminarHistorialPorZona(zona.nombre)
                 zonas.remove(zona)
                 historialAnalisis.removeAll { it.nombreZona == zona.nombre }
+                refrescarWidget()
             }
         }
     }
@@ -183,16 +432,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val zonasLocal = agroScanDao.obtenerTodasLasZonas()
             val entity = zonasLocal.find { it.nombre == zonaAntigua.nombre }
             if (entity != null) {
-                // Actualizamos la entidad con los nuevos datos pero conservando el mismo ID
+                // Se conserva el id para que Room reemplace la fila en lugar de crear otra
                 val nuevaEntity = zonaNueva.toEntity().copy(id = entity.id)
                 agroScanDao.insertarZona(nuevaEntity)
-                
-                // Actualizamos la lista en memoria
-                val indice = zonas.indexOf(zonaAntigua)
-                if (indice != -1) {
-                    zonas[indice] = zonaNueva
+            } else {
+                agroScanDao.insertarZona(zonaNueva.toEntity())
+            }
+            
+            val indice = zonas.indexOfFirst { it.nombre == zonaAntigua.nombre }
+            if (indice != -1) {
+                zonas[indice] = zonaNueva
+            } else {
+                val indiceNuevo = zonas.indexOfFirst { it.nombre == zonaNueva.nombre }
+                if (indiceNuevo != -1) {
+                    zonas[indiceNuevo] = zonaNueva
+                } else {
+                    zonas.add(zonaNueva)
                 }
             }
+            refrescarWidget()
         }
     }
 
@@ -225,6 +483,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (index != -1) {
                 historialAnalisis[index] = resultadoActualizado
             }
+            refrescarWidget()
         }
     }
 
@@ -262,56 +521,117 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         modoOscuroHabilitado = habilitado
     }
 
+    // Animaciones de la interfaz: se recuerdan entre sesiones
+    private val prefsApp = application.getSharedPreferences("agroscan_preferencias", Context.MODE_PRIVATE)
+
+    var animacionesHabilitadas by mutableStateOf(prefsApp.getBoolean(PREF_ANIMACIONES, true))
+        private set
+
+    fun alternarAnimaciones(activas: Boolean) {
+        animacionesHabilitadas = activas
+        prefsApp.edit().putBoolean(PREF_ANIMACIONES, activas).apply()
+    }
+
     fun cerrarSesion() {
+        // La cuenta se conserva; solo se cierra la sesión para pedir credenciales la próxima vez
+        prefsSesion.edit().putBoolean(SESION_ACTIVA, false).apply()
         usuarioActual = null
     }
 
+    /**
+     * Analiza la foto y devuelve el diagnóstico sin guardarlo: el usuario elige después
+     * en qué campo registrarlo con [guardarDiagnostico].
+     */
     fun analizarImagenPlanta(
-        base64Image: String, 
-        zonaSeleccionada: InformacionZona? = null,
-        onResult: (String) -> Unit
+        jpeg: ByteArray,
+        rotacion: Int,
+        onResult: (ResultadoEscaneo) -> Unit
     ) {
         viewModelScope.launch {
             try {
-                val mediaType = "text/plain".toMediaTypeOrNull()
-                val requestBody = base64Image.toRequestBody(mediaType)
-                
-                val response = apiService.detectDisease(
-                    project = "deteccion-de-enfermedades-sbaoa",
-                    version = "19",
-                    authHeader = "Bearer 0eETUshIouQdAiHdxL83",
-                    imageBase64 = requestBody
-                )
+                val bitmap = withContext(Dispatchers.Default) { decodificarConRotacion(jpeg, rotacion) }
 
-                if (response.predictions.isNotEmpty()) {
-                    val mejorPrediccion = response.predictions.maxByOrNull { it.confidence }
-                    val porcentaje = ((mejorPrediccion?.confidence ?: 0.0) * 100).toInt()
-                    val resultadoText = "Detectado: ${mejorPrediccion?.className} ($porcentaje%)"
-                    onResult(resultadoText)
-                    
-                    val resultado = ResultadoAnalisis(
-                        titulo = "Análisis IA",
-                        nombrePlanta = zonaSeleccionada?.cultivo ?: "Planta Detectada",
-                        nombreZona = zonaSeleccionada?.nombre ?: "Escaneo Rápido",
-                        descripcion = mejorPrediccion?.className ?: "Desconocido",
-                        valorColor = 0xFF2ECC71,
-                        fecha = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date()),
-                        hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()),
-                        ubicacion = ciudadUsuario,
-                        temperatura = datosClimaReales?.temperatura ?: "--",
-                        humedad = datosClimaReales?.humedad ?: "--",
-                        radiacionUV = datosClimaReales?.uv ?: "--",
-                        resumen = "Análisis automático realizado vía cámara."
-                    )
-                    
-                    agroScanDao.insertarHistorial(resultado.toEntity())
-                    historialAnalisis.add(0, resultado)
-                } else {
-                    onResult("No se detectaron problemas en la imagen.")
+                val diagnostico = when (modoDeteccion) {
+                    ModoDeteccion.NUBE -> detectarEnNube(bitmap)
+                    ModoDeteccion.LOCAL -> detectarEnLocal(bitmap)
+                    ModoDeteccion.AUTOMATICO -> try {
+                        detectarEnNube(bitmap)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        android.util.Log.w("MainViewModel", "Roboflow no disponible, usando modelo local: ${e.message}")
+                        detectarEnLocal(bitmap)
+                    }
                 }
+
+                if (diagnostico != null) {
+                    // Ambos modelos se traducen al mismo catálogo para que el historial sea comparable
+                    onResult(
+                        ResultadoEscaneo(
+                            enfermedad = CatalogoEnfermedades.clasificar(diagnostico.clase),
+                            porcentaje = (diagnostico.confianza * 100).toInt(),
+                            etiquetaModelo = diagnostico.clase,
+                            origen = diagnostico.origen
+                        )
+                    )
+                } else {
+                    onResult(ResultadoEscaneo.mensaje("No se detectaron hojas o síntomas en la imagen."))
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                onResult("Error: ${e.message}")
+                onResult(ResultadoEscaneo.mensaje("Error: ${e.message}"))
             }
         }
+    }
+
+    /** Registra el diagnóstico en el historial del campo elegido (o como escaneo rápido si no hay campo). */
+    fun guardarDiagnostico(escaneo: ResultadoEscaneo, zona: InformacionZona?) {
+        val enfermedad = escaneo.enfermedad ?: return
+        viewModelScope.launch {
+            val ahora = Date()
+            val resultado = ResultadoAnalisis(
+                titulo = "Análisis IA",
+                nombrePlanta = zona?.cultivo ?: enfermedad.cultivo.ifEmpty { "Planta Detectada" },
+                nombreZona = zona?.nombre ?: "Escaneo Rápido",
+                descripcion = enfermedad.nombre,
+                valorColor = if (enfermedad.sana) 0xFF2ECC71 else 0xFFE67E22,
+                fecha = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(ahora),
+                hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(ahora),
+                ubicacion = ciudadUsuario,
+                temperatura = datosClimaReales?.temperatura ?: "--",
+                humedad = datosClimaReales?.humedad ?: "--",
+                radiacionUV = datosClimaReales?.uv ?: "--",
+                resumen = "Análisis automático realizado vía cámara (${escaneo.origen}, ${escaneo.porcentaje}% de confianza, " +
+                        "etiqueta del modelo: ${escaneo.etiquetaModelo}). Viento: ${datosClimaReales?.viento ?: "--"}."
+            )
+
+            agroScanDao.insertarHistorial(resultado.toEntity())
+            historialAnalisis.add(0, resultado)
+            refrescarWidget()
+        }
+    }
+
+    private suspend fun detectarEnNube(bitmap: Bitmap): Diagnostico? {
+        check(BuildConfig.ROBOFLOW_API_KEY.isNotBlank()) { "Falta ROBOFLOW_API_KEY en local.properties" }
+        val base64 = withContext(Dispatchers.Default) { bitmapABase64(bitmap) }
+        val response = apiService.detectDisease(
+            // Modelo RF-DETR Small entrenado en Roboflow (workspace cristians-workspace-prtfd)
+            project = "plant-disease-w0ogb-fl4eq",
+            version = "1",
+            authHeader = "Bearer ${BuildConfig.ROBOFLOW_API_KEY}",
+            imageBase64 = base64.toRequestBody("text/plain".toMediaTypeOrNull())
+        )
+        val mejor = response.predictions.maxByOrNull { it.confidence } ?: return null
+        return Diagnostico(mejor.className, mejor.confidence.toFloat(), "Nube (Roboflow)")
+    }
+
+    private suspend fun detectarEnLocal(bitmap: Bitmap): Diagnostico? {
+        val mejor = withContext(Dispatchers.Default) {
+            val detector = detectorLocal
+                ?: throw IllegalStateException("Modelo local no disponible (falta assets/${DetectorLocal.NOMBRE_MODELO})")
+            detector.detectar(bitmap).maxByOrNull { it.confianza }
+        } ?: return null
+        return Diagnostico(mejor.clase, mejor.confianza, "Local (YOLO11)")
     }
 }

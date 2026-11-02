@@ -1,6 +1,7 @@
 package com.tecsup.agroscan
 
 import android.Manifest
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,6 +19,12 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.CompositionLocalProvider
+import com.tecsup.agroscan.ui.utils.CurvaSuave
+import com.tecsup.agroscan.ui.utils.LocalAnimaciones
+import com.tecsup.agroscan.screen.PantallaLogin
 import com.tecsup.agroscan.screen.PantallaPanelControl
 import com.tecsup.agroscan.ui.theme.AgroScanTheme
 import com.tecsup.agroscan.viewmodel.MainViewModel
@@ -31,7 +38,14 @@ class MainActivity : ComponentActivity() {
             val context = androidx.compose.ui.platform.LocalContext.current
             val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
             
-            // Lanzador para solicitar múltiples permisos
+            val prefs = context.getSharedPreferences("agroscan_widget_prefs", Context.MODE_PRIVATE)
+            val abrirCamaraDesdeWidget = prefs.getBoolean("abrir_camara", false)
+            if (abrirCamaraDesdeWidget) {
+                prefs.edit().putBoolean("abrir_camara", false).apply()
+            }
+            val abrirCamara = (intent?.getBooleanExtra("ABRIR_CAMARA", false) == true) || abrirCamaraDesdeWidget
+            val tabInicial = if (abrirCamara) 1 else 0
+            
             val lanzadorPermisos = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestMultiplePermissions()
             ) { resultados ->
@@ -65,7 +79,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Solicitar permisos al iniciar
             LaunchedEffect(Unit) {
                 lanzadorPermisos.launch(
                     arrayOf(
@@ -77,9 +90,29 @@ class MainActivity : ComponentActivity() {
             }
 
             AgroScanTheme(darkTheme = viewModel.modoOscuroHabilitado) {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding)) {
-                        PantallaPanelControl(viewModel = viewModel)
+                CompositionLocalProvider(LocalAnimaciones provides viewModel.animacionesHabilitadas) {
+                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                        Box(modifier = Modifier.padding(innerPadding)) {
+                            // Sin sesión (primera vez o tras cerrar sesión) se muestra el login
+                            AnimatedContent(
+                                targetState = viewModel.usuarioActual == null,
+                                transitionSpec = {
+                                    if (viewModel.animacionesHabilitadas) {
+                                        (fadeIn(tween(450, 100, CurvaSuave)) + scaleIn(tween(450, 100, CurvaSuave), initialScale = 0.96f))
+                                            .togetherWith(fadeOut(tween(200)))
+                                    } else {
+                                        EnterTransition.None togetherWith ExitTransition.None
+                                    }
+                                },
+                                label = "sesion"
+                            ) { sinSesion ->
+                                if (sinSesion) {
+                                    PantallaLogin(viewModel = viewModel)
+                                } else {
+                                    PantallaPanelControl(viewModel = viewModel, initialTab = tabInicial)
+                                }
+                            }
+                        }
                     }
                 }
             }

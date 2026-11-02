@@ -20,8 +20,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import com.tecsup.agroscan.viewmodel.MainViewModel
 import com.tecsup.agroscan.ui.utils.bounceClick
+import com.tecsup.agroscan.ui.utils.aparicion
+import com.tecsup.agroscan.ui.utils.NumeroAnimado
 
 @Composable
 fun PantallaUsuario(viewModel: MainViewModel) {
@@ -47,12 +58,11 @@ fun PantallaUsuario(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // --- TARJETA DE PERFIL ---
         Surface(
             shape = RoundedCornerShape(32.dp),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth().bounceClick()
+            modifier = Modifier.fillMaxWidth().aparicion(0).bounceClick()
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
@@ -95,13 +105,12 @@ fun PantallaUsuario(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- ESTADÍSTICAS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            TarjetaEstadistica("Zonas", viewModel.zonas.size.toString(), Modifier.weight(1f))
-            TarjetaEstadistica("Análisis", viewModel.historialAnalisis.size.toString(), Modifier.weight(1f))
+            TarjetaEstadistica("Zonas", viewModel.zonas.size, Modifier.weight(1f).aparicion(1))
+            TarjetaEstadistica("Análisis", viewModel.historialAnalisis.size, Modifier.weight(1f).aparicion(2))
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -114,16 +123,75 @@ fun PantallaUsuario(viewModel: MainViewModel) {
             modifier = Modifier.padding(start = 8.dp, bottom = 12.dp)
         )
 
+        val context = LocalContext.current
+        var dialogo by remember { mutableStateOf<DialogoPerfil?>(null) }
+
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier.fillMaxWidth()
         ) {
             Column {
-                OpcionPerfil(Icons.Outlined.Edit, "Editar Datos Personales")
+                OpcionPerfil(Icons.Outlined.Edit, "Editar Datos Personales") { dialogo = DialogoPerfil.DATOS }
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                OpcionPerfil(Icons.Outlined.Lock, "Cambiar Contraseña")
+                OpcionPerfil(Icons.Outlined.Lock, "Cambiar Contraseña") { dialogo = DialogoPerfil.CONTRASENA }
             }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "Soporte",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 8.dp, bottom = 12.dp)
+        )
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OpcionPerfil(Icons.Outlined.Email, "Contactar al administrador") { dialogo = DialogoPerfil.CONTACTO }
+        }
+
+        when (dialogo) {
+            DialogoPerfil.DATOS -> DialogoEditarDatos(
+                nombreInicial = usuario?.nombre.orEmpty(),
+                correoInicial = usuario?.email.orEmpty(),
+                alGuardar = { nombre, correo -> viewModel.actualizarDatos(nombre, correo) },
+                alTerminar = { guardado ->
+                    dialogo = null
+                    if (guardado) Toast.makeText(context, "Datos actualizados", Toast.LENGTH_SHORT).show()
+                }
+            )
+            DialogoPerfil.CONTRASENA -> DialogoCambiarContrasena(
+                alGuardar = { actual, nueva, confirmacion -> viewModel.cambiarContrasena(actual, nueva, confirmacion) },
+                alTerminar = { guardado ->
+                    dialogo = null
+                    if (guardado) Toast.makeText(context, "Contraseña actualizada", Toast.LENGTH_SHORT).show()
+                }
+            )
+            DialogoPerfil.CONTACTO -> DialogoContactarAdministrador(
+                correoInicial = viewModel.correoAdministrador(),
+                alEnviar = { correoAdmin, tipo, mensaje ->
+                    viewModel.guardarCorreoAdministrador(correoAdmin) ?: run {
+                        val asunto = "AgroScan · $tipo de ${usuario?.nombre.orEmpty()}"
+                        val cuerpo = "$mensaje\n\n--\n${usuario?.nombre.orEmpty()}\n${usuario?.email.orEmpty()}\n" +
+                                "Técnico agrónomo · enviado desde AgroScan"
+                        val uri = Uri.parse("mailto:${correoAdmin.trim()}?subject=${Uri.encode(asunto)}&body=${Uri.encode(cuerpo)}")
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_SENDTO, uri))
+                            dialogo = null
+                            null
+                        } catch (_: Exception) {
+                            "No hay una aplicación de correo instalada"
+                        }
+                    }
+                },
+                alCancelar = { dialogo = null }
+            )
+            null -> Unit
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -144,7 +212,28 @@ fun PantallaUsuario(viewModel: MainViewModel) {
                     Switch(
                         checked = viewModel.modoOscuroHabilitado,
                         onCheckedChange = { viewModel.alternarTema(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary)
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MaterialTheme.colorScheme.primary)
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.AutoAwesome, null, tint = Color.Gray)
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Animaciones", color = verdeOscuro)
+                        Text(
+                            "Transiciones y efectos de la interfaz",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = viewModel.animacionesHabilitadas,
+                        onCheckedChange = { viewModel.alternarAnimaciones(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MaterialTheme.colorScheme.primary)
                     )
                 }
             }
@@ -167,30 +256,164 @@ fun PantallaUsuario(viewModel: MainViewModel) {
     }
 }
 
+private enum class DialogoPerfil { DATOS, CONTRASENA, CONTACTO }
+
 @Composable
-fun TarjetaEstadistica(etiqueta: String, valor: String, modifier: Modifier) {
+private fun DialogoEditarDatos(
+    nombreInicial: String,
+    correoInicial: String,
+    alGuardar: (String, String) -> String?,
+    alTerminar: (Boolean) -> Unit
+) {
+    var nombre by remember { mutableStateOf(nombreInicial) }
+    var correo by remember { mutableStateOf(correoInicial) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { alTerminar(false) },
+        title = { Text("Editar datos personales") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                CampoDialogo(nombre, { nombre = it; error = null }, "Nombre completo")
+                CampoDialogo(correo, { correo = it; error = null }, "Correo corporativo", teclado = KeyboardType.Email)
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                error = alGuardar(nombre, correo)
+                if (error == null) alTerminar(true)
+            }) { Text("Guardar") }
+        },
+        dismissButton = { TextButton(onClick = { alTerminar(false) }) { Text("Cancelar") } }
+    )
+}
+
+@Composable
+private fun DialogoCambiarContrasena(
+    alGuardar: (String, String, String) -> String?,
+    alTerminar: (Boolean) -> Unit
+) {
+    var actual by remember { mutableStateOf("") }
+    var nueva by remember { mutableStateOf("") }
+    var confirmacion by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { alTerminar(false) },
+        title = { Text("Cambiar contraseña") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                CampoDialogo(actual, { actual = it; error = null }, "Contraseña actual", teclado = KeyboardType.Password)
+                CampoDialogo(nueva, { nueva = it; error = null }, "Nueva contraseña (mínimo 6)", teclado = KeyboardType.Password)
+                CampoDialogo(confirmacion, { confirmacion = it; error = null }, "Confirmar nueva contraseña", teclado = KeyboardType.Password)
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    error = alGuardar(actual, nueva, confirmacion)
+                    if (error == null) alTerminar(true)
+                },
+                enabled = actual.isNotEmpty() && nueva.isNotEmpty() && confirmacion.isNotEmpty()
+            ) { Text("Guardar") }
+        },
+        dismissButton = { TextButton(onClick = { alTerminar(false) }) { Text("Cancelar") } }
+    )
+}
+
+@Composable
+private fun DialogoContactarAdministrador(
+    correoInicial: String,
+    alEnviar: (String, String, String) -> String?,
+    alCancelar: () -> Unit
+) {
+    var correo by remember { mutableStateOf(correoInicial) }
+    var tipo by remember { mutableStateOf("Consulta") }
+    var mensaje by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = alCancelar,
+        title = { Text("Contactar al administrador") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Se abrirá su aplicación de correo con el mensaje listo para enviar al gerente o administrador de la empresa.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                CampoDialogo(correo, { correo = it; error = null }, "Correo del administrador", teclado = KeyboardType.Email)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Consulta", "Observación").forEach { opcion ->
+                        FilterChip(selected = tipo == opcion, onClick = { tipo = opcion }, label = { Text(opcion) })
+                    }
+                }
+                OutlinedTextField(
+                    value = mensaje,
+                    onValueChange = { mensaje = it; error = null },
+                    label = { Text("Mensaje") },
+                    minLines = 4,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { error = alEnviar(correo, tipo, mensaje.trim()) },
+                enabled = correo.isNotBlank() && mensaje.isNotBlank()
+            ) { Text("Abrir correo") }
+        },
+        dismissButton = { TextButton(onClick = alCancelar) { Text("Cancelar") } }
+    )
+}
+
+@Composable
+private fun CampoDialogo(
+    valor: String,
+    alCambiar: (String) -> Unit,
+    etiqueta: String,
+    teclado: KeyboardType = KeyboardType.Text
+) {
+    OutlinedTextField(
+        value = valor,
+        onValueChange = alCambiar,
+        label = { Text(etiqueta) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        visualTransformation = if (teclado == KeyboardType.Password) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(keyboardType = teclado),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+fun TarjetaEstadistica(etiqueta: String, valor: Int, modifier: Modifier) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface,
         modifier = modifier.bounceClick()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(etiqueta, fontSize = 12.sp, color = Color.Gray)
-            Text(valor, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            NumeroAnimado(valor, MaterialTheme.colorScheme.primary, 20.sp)
         }
     }
 }
 
 @Composable
-fun OpcionPerfil(icono: androidx.compose.ui.graphics.vector.ImageVector, titulo: String) {
+fun OpcionPerfil(icono: ImageVector, titulo: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .bounceClick()
-            .clickable { /* Acción futura */ }
+            .clickable { onClick() }
             .padding(20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

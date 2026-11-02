@@ -33,6 +33,17 @@ import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
+import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.MapTileIndex
+import com.google.android.gms.location.LocationServices
+import com.google.maps.android.SphericalUtil
+import com.tecsup.agroscan.data.GeometriaParcela
+import androidx.compose.runtime.saveable.rememberSaveable
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -43,6 +54,13 @@ import android.annotation.SuppressLint
 import android.app.Application
 import com.tecsup.agroscan.ui.theme.AgroScanTheme
 import com.tecsup.agroscan.ui.utils.bounceClick
+import com.tecsup.agroscan.ui.utils.aparicion
+import com.tecsup.agroscan.ui.utils.especAnimacion
+import com.tecsup.agroscan.ui.utils.CurvaSuave
+import com.tecsup.agroscan.ui.utils.LocalAnimaciones
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.draw.clip
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -50,10 +68,11 @@ import java.util.*
 @Composable
 fun PantallaPanelControl(
     viewModel: MainViewModel,
+    initialTab: Int = 0,
     alSolicitarUbicacion: () -> Unit = {},
     alSolicitarCamara: () -> Unit = {}
 ) {
-    var itemSeleccionado by remember { mutableIntStateOf(0) }
+    var itemSeleccionado by remember { mutableIntStateOf(initialTab) }
     var zonaSeleccionada by remember { mutableStateOf<InformacionZona?>(null) }
     var mostrarHojaDetalle by remember { mutableStateOf(false) }
     var mostrarHojaAgregar by remember { mutableStateOf(false) }
@@ -68,12 +87,12 @@ fun PantallaPanelControl(
     var modoDibujoActivo by remember { mutableStateOf(false) }
     var modoEdicionPoligono by remember { mutableStateOf(false) }
 
-    // Estados para eliminación segura
     var mostrarDialogoEliminar by remember { mutableStateOf(false) }
     var zonaParaEliminar by remember { mutableStateOf<InformacionZona?>(null) }
 
     val colorFondo = MaterialTheme.colorScheme.background
     val colorTextoNav = MaterialTheme.colorScheme.primary
+    val animaciones = LocalAnimaciones.current
 
     Box(modifier = Modifier.fillMaxSize().background(colorFondo)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -81,12 +100,16 @@ fun PantallaPanelControl(
                 AnimatedContent(
                     targetState = itemSeleccionado,
                     transitionSpec = {
-                        if (targetState > initialState) {
-                            slideInHorizontally(animationSpec = tween(300)) { it } + fadeIn() togetherWith
-                                    slideOutHorizontally(animationSpec = tween(300)) { -it } + fadeOut()
+                        if (!animaciones) {
+                            EnterTransition.None togetherWith ExitTransition.None
                         } else {
-                            slideInHorizontally(animationSpec = tween(300)) { -it } + fadeIn() togetherWith
-                                    slideOutHorizontally(animationSpec = tween(300)) { it } + fadeOut()
+                            // Desplazamiento corto + fundido: se percibe la dirección sin mover la pantalla entera
+                            val direccion = if (targetState > initialState) 1 else -1
+                            (fadeIn(tween(320, 80, CurvaSuave)) +
+                                    slideInHorizontally(tween(380, easing = CurvaSuave)) { direccion * it / 6 } +
+                                    scaleIn(tween(380, easing = CurvaSuave), initialScale = 0.98f)) togetherWith
+                                    (fadeOut(tween(160)) +
+                                            slideOutHorizontally(tween(260, easing = CurvaSuave)) { -direccion * it / 10 })
                         }.using(SizeTransform(clip = false))
                     },
                     label = "navTransition"
@@ -123,7 +146,6 @@ fun PantallaPanelControl(
             }
         }
 
-        // --- BARRA DE NAVEGACIÓN ---
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 12.dp).fillMaxWidth().height(72.dp),
             shape = RoundedCornerShape(36.dp),
@@ -135,17 +157,33 @@ fun PantallaPanelControl(
                 val iconos = listOf(Icons.Default.Home, Icons.Default.CameraAlt, Icons.Default.History, Icons.Default.Person)
                 itemsNav.forEachIndexed { index, item ->
                     val estaSeleccionado = itemSeleccionado == index
+                    // Píldora que se ilumina detrás de la pestaña activa
+                    val colorPildora by animateColorAsState(
+                        if (estaSeleccionado) colorTextoNav.copy(alpha = 0.12f) else Color.Transparent,
+                        especAnimacion(300), label = "pildoraNav"
+                    )
+                    val colorItem by animateColorAsState(
+                        if (estaSeleccionado) colorTextoNav else Color(0xFF8E9196),
+                        especAnimacion(300), label = "colorNav"
+                    )
+                    val tamanoIcono by animateDpAsState(
+                        if (estaSeleccionado) 26.dp else 23.dp, especAnimacion(300), label = "iconoNav"
+                    )
                     Column(
                         modifier = Modifier
                             .weight(1f)
+                            .padding(horizontal = 4.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(colorPildora)
                             .bounceClick()
-                            .clickable { itemSeleccionado = index },
-                        horizontalAlignment = Alignment.CenterHorizontally, 
+                            .clickable { itemSeleccionado = index }
+                            .padding(vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Icon(imageVector = iconos[index], contentDescription = item, tint = if (estaSeleccionado) colorTextoNav else Color(0xFF8E9196), modifier = Modifier.size(if (estaSeleccionado) 28.dp else 24.dp))
+                        Icon(imageVector = iconos[index], contentDescription = item, tint = colorItem, modifier = Modifier.size(tamanoIcono))
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = item, fontSize = 11.sp, fontWeight = if (estaSeleccionado) FontWeight.Bold else FontWeight.Medium, color = if (estaSeleccionado) colorTextoNav else Color(0xFF8E9196))
+                        Text(text = item, fontSize = 11.sp, fontWeight = if (estaSeleccionado) FontWeight.Bold else FontWeight.Medium, color = colorItem)
                     }
                 }
             }
@@ -222,7 +260,6 @@ fun PantallaPanelControl(
             }
         }
 
-        // --- DIÁLOGO DE ELIMINACIÓN SEGURA ---
         if (mostrarDialogoEliminar && zonaParaEliminar != null) {
             DialogoConfirmacionEliminar(
                 nombreZona = zonaParaEliminar!!.nombre,
@@ -238,7 +275,6 @@ fun PantallaPanelControl(
             )
         }
 
-        // --- PANTALLA DE DIBUJO ---
         if (modoDibujoActivo) {
             PantallaDibujoParcela(
                 viewModel = viewModel,
@@ -256,6 +292,55 @@ fun PantallaPanelControl(
     }
 }
 
+/** Imágenes satelitales de Esri World Imagery (sus teselas usan el orden z/y/x). */
+private object EsriSatelite : OnlineTileSourceBase(
+    "EsriWorldImagery", 0, 19, 256, "",
+    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/")
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String =
+        baseUrl + MapTileIndex.getZoom(pMapTileIndex) + "/" +
+                MapTileIndex.getY(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex)
+}
+
+private fun iconoVertice(contexto: android.content.Context, numero: Int, alerta: Boolean): android.graphics.drawable.Drawable {
+    val densidad = contexto.resources.displayMetrics.density
+    val lado = (30 * densidad).toInt()
+    val bitmap = android.graphics.Bitmap.createBitmap(lado, lado, android.graphics.Bitmap.Config.ARGB_8888)
+    val lienzo = android.graphics.Canvas(bitmap)
+    val pincel = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    val color = if (alerta) android.graphics.Color.rgb(198, 40, 40) else android.graphics.Color.rgb(46, 64, 31)
+    val radio = lado / 2f
+    pincel.color = android.graphics.Color.WHITE
+    lienzo.drawCircle(radio, radio, radio - densidad, pincel)
+    pincel.style = android.graphics.Paint.Style.STROKE
+    pincel.strokeWidth = 3 * densidad
+    pincel.color = color
+    lienzo.drawCircle(radio, radio, radio - 2.5f * densidad, pincel)
+    pincel.style = android.graphics.Paint.Style.FILL
+    pincel.textSize = 13 * densidad
+    pincel.typeface = android.graphics.Typeface.DEFAULT_BOLD
+    pincel.textAlign = android.graphics.Paint.Align.CENTER
+    lienzo.drawText(numero.toString(), radio, radio - (pincel.descent() + pincel.ascent()) / 2, pincel)
+    return android.graphics.drawable.BitmapDrawable(contexto.resources, bitmap)
+}
+
+@SuppressLint("MissingPermission")
+private fun centrarEnUbicacion(contexto: android.content.Context, mapa: MapView) {
+    val conPermiso = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        .any { ContextCompat.checkSelfPermission(contexto, it) == PackageManager.PERMISSION_GRANTED }
+    if (!conPermiso) {
+        android.widget.Toast.makeText(contexto, "Active el permiso de ubicación", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    LocationServices.getFusedLocationProviderClient(contexto).lastLocation.addOnSuccessListener { ubicacion ->
+        if (ubicacion != null) {
+            mapa.controller.animateTo(GeoPoint(ubicacion.latitude, ubicacion.longitude), 18.0, 700L)
+        } else {
+            android.widget.Toast.makeText(contexto, "Ubicación aún no disponible", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
 @Composable
 fun PantallaDibujoParcela(
     viewModel: MainViewModel,
@@ -263,89 +348,211 @@ fun PantallaDibujoParcela(
     alCancelar: () -> Unit
 ) {
     val contexto = LocalContext.current
-    val hectareasCalculadas = viewModel.calcularHectareas(viewModel.puntosEdicion)
     val locale = LocalConfiguration.current.locales[0]
+    val puntos = viewModel.puntosEdicion
+    val geo = puntos.map { GeometriaParcela.Punto(it.latitude, it.longitude) }
+    val hectareasCalculadas = viewModel.calcularHectareas(puntos)
+    val perimetro = when {
+        puntos.size >= 3 -> SphericalUtil.computeLength(puntos + puntos.first())
+        puntos.size == 2 -> SphericalUtil.computeLength(puntos)
+        else -> 0.0
+    }
+    val bordesCruzados = puntos.size >= 4 && !GeometriaParcela.esSimple(geo)
+
+    var satelite by rememberSaveable { mutableStateOf(true) }
+    var mapa by remember { mutableStateOf<MapView?>(null) }
+    // Puntos en el orden en que se tocaron, para que "deshacer" quite el último aunque se haya insertado en medio
+    val pilaDeshacer = remember { mutableStateListOf<LatLng>() }
 
     // Configuración necesaria para OSM
     Configuration.getInstance().userAgentValue = contexto.packageName
+
+    // Al abrir: encuadrar la parcela que se edita o centrar en la ubicación del técnico
+    LaunchedEffect(mapa) {
+        val m = mapa ?: return@LaunchedEffect
+        when {
+            puntos.size >= 2 -> {
+                val caja = BoundingBox.fromGeoPoints(puntos.map { GeoPoint(it.latitude, it.longitude) })
+                m.post { m.zoomToBoundingBox(caja.increaseByScale(1.6f), false) }
+            }
+            puntos.size == 1 -> m.controller.setCenter(GeoPoint(puntos[0].latitude, puntos[0].longitude))
+            else -> centrarEnUbicacion(contexto, m)
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
-                    setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
-                    controller.setZoom(16.0)
+                    zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                    controller.setZoom(17.0)
                     controller.setCenter(GeoPoint(-12.046374, -77.042793))
 
                     val overlayEventos = MapEventsOverlay(object : MapEventsReceiver {
                         override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
-                            viewModel.puntosEdicion.add(LatLng(p.latitude, p.longitude))
+                            val nuevo = LatLng(p.latitude, p.longitude)
+                            val actuales = viewModel.puntosEdicion.map { GeometriaParcela.Punto(it.latitude, it.longitude) }
+                            val indice = GeometriaParcela.indiceDeInsercion(actuales, GeometriaParcela.Punto(p.latitude, p.longitude))
+                            viewModel.puntosEdicion.add(indice, nuevo)
+                            pilaDeshacer.add(nuevo)
                             return true
                         }
                         override fun longPressHelper(p: GeoPoint): Boolean = false
                     })
                     overlays.add(overlayEventos)
+                    mapa = this
                 }
             },
             update = { mapView ->
-                mapView.overlays.removeAll { it is Marker || it is Polygon }
+                val fuente = if (satelite) EsriSatelite else TileSourceFactory.MAPNIK
+                if (mapView.tileProvider.tileSource != fuente) mapView.setTileSource(fuente)
 
-                if (viewModel.puntosEdicion.isNotEmpty()) {
-                    val puntosGeo = viewModel.puntosEdicion.map { GeoPoint(it.latitude, it.longitude) }
+                mapView.overlays.removeAll { it is Marker || it is Polygon || it is Polyline }
+                val puntosGeo = puntos.map { GeoPoint(it.latitude, it.longitude) }
+                val colorBorde = if (bordesCruzados) android.graphics.Color.rgb(198, 40, 40) else android.graphics.Color.rgb(192, 224, 160)
 
-                    if (puntosGeo.size >= 3) {
-                        val poligono = Polygon(mapView)
-                        poligono.points = puntosGeo
-                        poligono.fillPaint.color = android.graphics.Color.argb(80, 192, 224, 160)
-                        poligono.outlinePaint.color = android.graphics.Color.rgb(46, 64, 31)
-                        poligono.outlinePaint.strokeWidth = 3f
-                        mapView.overlays.add(poligono)
-                    }
+                if (puntosGeo.size >= 3) {
+                    val poligono = Polygon(mapView)
+                    poligono.points = puntosGeo
+                    poligono.fillPaint.color = if (bordesCruzados) android.graphics.Color.argb(70, 198, 40, 40)
+                    else android.graphics.Color.argb(90, 192, 224, 160)
+                    poligono.outlinePaint.color = colorBorde
+                    poligono.outlinePaint.strokeWidth = 4f * contexto.resources.displayMetrics.density
+                    poligono.setOnClickListener { _, _, _ -> false }
+                    mapView.overlays.add(poligono)
+                } else if (puntosGeo.size == 2) {
+                    val linea = Polyline(mapView)
+                    linea.setPoints(puntosGeo)
+                    linea.outlinePaint.color = colorBorde
+                    linea.outlinePaint.strokeWidth = 4f * contexto.resources.displayMetrics.density
+                    mapView.overlays.add(linea)
+                }
 
-                    viewModel.puntosEdicion.forEach { latLng ->
-                        val marcador = Marker(mapView)
-                        marcador.position = GeoPoint(latLng.latitude, latLng.longitude)
-                        marcador.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        marcador.icon = ContextCompat.getDrawable(contexto, org.osmdroid.library.R.drawable.marker_default)
-                        mapView.overlays.add(marcador)
-                    }
+                puntos.forEachIndexed { i, latLng ->
+                    val marcador = Marker(mapView)
+                    marcador.position = GeoPoint(latLng.latitude, latLng.longitude)
+                    marcador.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    marcador.icon = iconoVertice(contexto, i + 1, bordesCruzados)
+                    marcador.setInfoWindow(null)
+                    // Mantener presionado un punto para moverlo
+                    marcador.isDraggable = true
+                    marcador.setOnMarkerDragListener(object : Marker.OnMarkerDragListener {
+                        override fun onMarkerDrag(m: Marker) {}
+                        override fun onMarkerDragStart(m: Marker) {}
+                        override fun onMarkerDragEnd(m: Marker) {
+                            if (i < viewModel.puntosEdicion.size) {
+                                viewModel.puntosEdicion[i] = LatLng(m.position.latitude, m.position.longitude)
+                            }
+                        }
+                    })
+                    marcador.setOnMarkerClickListener { _, _ -> true }
+                    mapView.overlays.add(marcador)
                 }
                 mapView.invalidate()
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        // UI de Control de Dibujo
-        Column(
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            shadowElevation = 6.dp,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 60.dp)
-                .padding(horizontal = 24.dp)
+                .statusBarsPadding()
+                .padding(top = 12.dp)
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .aparicion()
         ) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Dibujando Parcela", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                    Text("Toca el mapa para añadir los límites", fontSize = 12.sp, color = Color.Gray)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = String.format(locale, "%.2f ha", hectareasCalculadas),
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.primary
+            Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Dibujar parcela", fontWeight = FontWeight.Bold, fontSize = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    if (puntos.isNotEmpty()) {
+                        TextButton(onClick = { puntos.clear(); pilaDeshacer.clear() }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Text("Limpiar", fontSize = 13.sp)
+                        }
+                    }
+                }
+                Text(
+                    text = when {
+                        puntos.isEmpty() -> "Toca el mapa para marcar la primera esquina"
+                        puntos.size < 3 -> "Marca ${3 - puntos.size} esquina${if (puntos.size == 2) "" else "s"} más"
+                        else -> "Marca las esquinas en cualquier orden · mantén presionado un punto para moverlo"
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    MedidaDibujo(String.format(locale, "%.2f", hectareasCalculadas), "hectáreas", destacada = true)
+                    MedidaDibujo(
+                        if (perimetro >= 1000) String.format(locale, "%.2f km", perimetro / 1000) else String.format(locale, "%.0f m", perimetro),
+                        "perímetro"
                     )
+                    MedidaDibujo(puntos.size.toString(), "vértices")
+                }
+                AnimatedVisibility(visible = bordesCruzados) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.padding(top = 10.dp).fillMaxWidth()
+                    ) {
+                        Row(modifier = Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.WarningAmber, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Los bordes se cruzan", fontSize = 13.sp, color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                val ordenados = GeometriaParcela.ordenarPorAngulo(geo).map { LatLng(it.lat, it.lng) }
+                                puntos.clear()
+                                puntos.addAll(ordenados)
+                                pilaDeshacer.clear()
+                            }) { Text("Ordenar", fontWeight = FontWeight.Bold) }
+                        }
+                    }
                 }
             }
         }
 
+        Column(
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp, top = 80.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            BotonMapa(if (satelite) Icons.Default.Map else Icons.Default.Satellite, if (satelite) "Ver mapa" else "Ver satélite") {
+                satelite = !satelite
+            }
+            BotonMapa(Icons.Default.MyLocation, "Mi ubicación") { mapa?.let { centrarEnUbicacion(contexto, it) } }
+            BotonMapa(Icons.Default.Add, "Acercar") { mapa?.controller?.zoomIn() }
+            BotonMapa(Icons.Default.Remove, "Alejar") { mapa?.controller?.zoomOut() }
+            AnimatedVisibility(visible = puntos.isNotEmpty()) {
+                BotonMapa(Icons.AutoMirrored.Filled.Undo, "Deshacer") {
+                    val ultimo = pilaDeshacer.removeLastOrNull()
+                    if (ultimo != null && puntos.remove(ultimo)) return@BotonMapa
+                    if (puntos.isNotEmpty()) puntos.removeAt(puntos.lastIndex)
+                }
+            }
+        }
+
+        // Atribución obligatoria de las teselas
+        Text(
+            text = if (satelite) "© Esri, Maxar, Earthstar Geographics" else "© OpenStreetMap",
+            fontSize = 10.sp,
+            color = Color.White,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 16.dp, bottom = 112.dp)
+                .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 40.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 24.dp)
                 .padding(horizontal = 24.dp)
                 .fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -361,27 +568,41 @@ fun PantallaDibujoParcela(
 
             Button(
                 onClick = alTerminar,
-                enabled = viewModel.puntosEdicion.size >= 3,
+                enabled = puntos.size >= 3 && !bordesCruzados,
                 modifier = Modifier.weight(1f).height(56.dp).bounceClick(),
                 shape = RoundedCornerShape(28.dp)
             ) {
+                Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text("Terminar", fontWeight = FontWeight.Bold)
             }
         }
+    }
+}
 
-        if (viewModel.puntosEdicion.isNotEmpty()) {
-            FloatingActionButton(
-                onClick = { viewModel.puntosEdicion.removeAt(viewModel.puntosEdicion.lastIndex) },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(bottom = 120.dp, end = 24.dp),
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary,
-                shape = CircleShape
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Undo, "Deshacer")
-            }
-        }
+@Composable
+private fun MedidaDibujo(valor: String, etiqueta: String, destacada: Boolean = false) {
+    Column {
+        Text(
+            valor,
+            fontSize = if (destacada) 24.sp else 18.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = if (destacada) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+        )
+        Text(etiqueta, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun BotonMapa(icono: ImageVector, descripcion: String, alPulsar: () -> Unit) {
+    SmallFloatingActionButton(
+        onClick = alPulsar,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.primary,
+        shape = CircleShape,
+        modifier = Modifier.bounceClick()
+    ) {
+        Icon(icono, descripcion)
     }
 }
 
@@ -501,24 +722,22 @@ fun ContenidoPrincipalPanelControl(
             }
         }
         
-        // --- SECCIÓN DE ALERTAS AGROCLIMÁTICAS TEMPRANAS ---
         if (viewModel.alertasClimaticasActivas.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             Text("Alertas Agroclimáticas Activas", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
             Spacer(modifier = Modifier.height(8.dp))
-            viewModel.alertasClimaticasActivas.forEach { alerta ->
-                TarjetaAlerta(
+            viewModel.alertasClimaticasActivas.forEachIndexed { i, alerta ->
+                Box(Modifier.aparicion(i)) { TarjetaAlerta(
                     titulo = "${alerta.titulo} (${alerta.patogenoAsociado})",
                     subtitulo = "${alerta.descripcion}\nRecomendación: ${alerta.recomendaciones}",
                     icono = Icons.Default.Thunderstorm,
                     colorContenedor = Color(0xFFFDE8E8),
                     colorContenido = Color(0xFF9B1C1C)
-                )
+                ) }
                 Spacer(modifier = Modifier.height(8.dp))
             }
         }
         
-        // --- BOTÓN DE SINCRONIZACIÓN WEB ---
         Spacer(modifier = Modifier.height(12.dp))
         OutlinedButton(
             onClick = {
@@ -649,10 +868,10 @@ fun TarjetaAlerta(titulo: String, subtitulo: String, icono: ImageVector, colorCo
 @Composable
 fun CuadriculaZonas(zonas: List<InformacionZona>, alHacerClicEnZona: (InformacionZona) -> Unit, alEditar: (InformacionZona) -> Unit, alEliminar: (InformacionZona) -> Unit) {
     Column {
-        zonas.chunked(2).forEach { par ->
+        zonas.chunked(2).forEachIndexed { fila, par ->
             Row(modifier = Modifier.fillMaxWidth()) {
-                par.forEach { zona ->
-                    Box(modifier = Modifier.weight(1f)) {
+                par.forEachIndexed { columna, zona ->
+                    Box(modifier = Modifier.weight(1f).aparicion(fila * 2 + columna)) {
                         TarjetaZona(zona, alHacerClic = { alHacerClicEnZona(zona) }, alEditar = { alEditar(zona) }, alEliminar = { alEliminar(zona) })
                     }
                 }
@@ -688,6 +907,37 @@ fun TarjetaZona(zona: InformacionZona, alHacerClic: () -> Unit, alEditar: () -> 
     }
 }
 
+fun estimarDiasCosecha(cultivo: String): Int {
+    val text = cultivo.lowercase()
+    return when {
+        text.contains("papa") -> 120
+        text.contains("maíz") || text.contains("maiz") -> 140
+        text.contains("café") || text.contains("cafe") -> 270
+        text.contains("quinua") -> 150
+        text.contains("arroz") -> 120
+        text.contains("tomate") -> 90
+        text.contains("cacao") -> 180
+        else -> 90
+    }
+}
+
+fun calcularFechaCosecha(fechaSiembraStr: String, dias: Int, locale: Locale): String {
+    return try {
+        val sdf = SimpleDateFormat("dd/MM/yyyy", locale)
+        val date = sdf.parse(fechaSiembraStr) ?: Date()
+        val calendar = Calendar.getInstance().apply {
+            time = date
+            add(Calendar.DAY_OF_YEAR, dias)
+        }
+        sdf.format(calendar.time)
+    } catch (_: Exception) {
+        val calendar = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, dias)
+        }
+        SimpleDateFormat("dd/MM/yyyy", locale).format(calendar.time)
+    }
+}
+
 @Composable
 fun FormularioAgregarZona(
     viewModel: MainViewModel,
@@ -704,8 +954,16 @@ fun FormularioAgregarZona(
     var nivelN by remember { mutableStateOf("Medio") }
     var nivelP by remember { mutableStateOf("Medio") }
     var nivelK by remember { mutableStateOf("Medio") }
-
+    
     val locale = LocalConfiguration.current.locales[0]
+    val fechaActual = remember { SimpleDateFormat("dd/MM/yyyy", locale).format(Date()) }
+    var fechaSiembra by remember { mutableStateOf(fechaActual) }
+
+    val diasEstimados = estimarDiasCosecha(cultivo)
+    val fechaCosechaCalculada = remember(fechaSiembra, diasEstimados) {
+        calcularFechaCosecha(fechaSiembra, diasEstimados, locale)
+    }
+    var fechaCosecha by remember(fechaCosechaCalculada) { mutableStateOf(fechaCosechaCalculada) }
     
     val hectareasCalculadas = if (viewModel.puntosEdicion.isNotEmpty()) 
         String.format(locale, "%.2f", viewModel.calcularHectareas(viewModel.puntosEdicion)) 
@@ -736,6 +994,26 @@ fun FormularioAgregarZona(
             label = { Text("Cultivo") }, 
             modifier = Modifier.fillMaxWidth(), 
             shape = RoundedCornerShape(16.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = fechaSiembra,
+            onValueChange = { fechaSiembra = it },
+            label = { Text("Fecha de Siembra (dd/MM/yyyy)") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = fechaCosecha,
+            onValueChange = { fechaCosecha = it },
+            label = { Text("Fecha Estimada de Cosecha (dd/MM/yyyy)") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true
         )
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -799,7 +1077,7 @@ fun FormularioAgregarZona(
                     nombre = nombre, 
                     cultivo = cultivo, 
                     color = Color(0xFFC0E0A0), 
-                    diasParaCosecha = 30, 
+                    diasParaCosecha = diasEstimados, 
                     ubicacion = if (viewModel.puntosEdicion.isNotEmpty()) viewModel.puntosEdicion.first() else LatLng(-12.0, -77.0), 
                     hectareas = hectareasCalculadas.replace(",", ".").toDoubleOrNull() ?: 0.0,
                     vertices = viewModel.puntosEdicion.toList(),
@@ -807,7 +1085,9 @@ fun FormularioAgregarZona(
                     phSuelo = phSuelo.toDoubleOrNull() ?: 6.8,
                     nivelNitrogeno = nivelN,
                     nivelFosforo = nivelP,
-                    nivelPotasio = nivelK
+                    nivelPotasio = nivelK,
+                    fechaSiembra = fechaSiembra,
+                    fechaCosecha = fechaCosecha
                 )) 
                 viewModel.puntosEdicion.clear()
             },
@@ -830,7 +1110,16 @@ fun FormularioEditarZona(
 ) {
     var nombre by remember(nombreActual) { mutableStateOf(nombreActual) }
     var cultivo by remember(cultivoActual) { mutableStateOf(cultivoActual) }
+    var fechaSiembra by remember(zona.fechaSiembra) { mutableStateOf(zona.fechaSiembra.ifBlank { SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date()) }) }
     val locale = LocalConfiguration.current.locales[0]
+
+    val diasEstimados = estimarDiasCosecha(cultivo)
+    val fechaCosechaCalculada = remember(fechaSiembra, diasEstimados) {
+        calcularFechaCosecha(fechaSiembra, diasEstimados, locale)
+    }
+    var fechaCosecha by remember(zona.fechaCosecha, fechaCosechaCalculada) { 
+        mutableStateOf(zona.fechaCosecha.ifBlank { fechaCosechaCalculada }) 
+    }
     
     val hectareasCalculadas = if (viewModel.puntosEdicion.isNotEmpty()) 
         String.format(locale, "%.2f", viewModel.calcularHectareas(viewModel.puntosEdicion)) 
@@ -861,6 +1150,26 @@ fun FormularioEditarZona(
             label = { Text("Cultivo") }, 
             modifier = Modifier.fillMaxWidth(), 
             shape = RoundedCornerShape(16.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = fechaSiembra,
+            onValueChange = { fechaSiembra = it },
+            label = { Text("Fecha de Siembra (dd/MM/yyyy)") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = fechaCosecha,
+            onValueChange = { fechaCosecha = it },
+            label = { Text("Fecha Estimada de Cosecha (dd/MM/yyyy)") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true
         )
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -895,9 +1204,12 @@ fun FormularioEditarZona(
                 alActualizar(zona.copy(
                     nombre = nombre, 
                     cultivo = cultivo, 
+                    diasParaCosecha = diasEstimados,
                     hectareas = hectareasCalculadas.replace(",", ".").toDoubleOrNull() ?: zona.hectareas,
                     vertices = viewModel.puntosEdicion.toList(),
-                    ubicacion = if (viewModel.puntosEdicion.isNotEmpty()) viewModel.puntosEdicion.first() else zona.ubicacion
+                    ubicacion = if (viewModel.puntosEdicion.isNotEmpty()) viewModel.puntosEdicion.first() else zona.ubicacion,
+                    fechaSiembra = fechaSiembra,
+                    fechaCosecha = fechaCosecha
                 )) 
                 viewModel.puntosEdicion.clear()
             },
@@ -916,6 +1228,14 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
     Column(modifier = Modifier.fillMaxWidth().padding(24.dp).verticalScroll(rememberScrollState())) {
         Text(text = zona.nombre, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
         Text(text = "Cultivo: ${zona.cultivo}", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (zona.fechaSiembra.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = "Siembra: ${zona.fechaSiembra}", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (zona.fechaCosecha.isNotBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(text = "Cosecha estimada: ${zona.fechaCosecha} (${zona.diasParaCosecha} días)", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        }
         Spacer(modifier = Modifier.height(24.dp))
         
         Surface(modifier = Modifier.fillMaxWidth().height(220.dp), shape = RoundedCornerShape(24.dp), color = Color.LightGray) {
@@ -926,7 +1246,6 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
                         controller.setZoom(16.0)
                         controller.setCenter(GeoPoint(zona.ubicacion.latitude, zona.ubicacion.longitude))
 
-                        // Si hay vértices guardados, dibujar el polígono real
                         if (zona.vertices.size >= 3) {
                             val poligono = Polygon(this)
                             poligono.points = zona.vertices.map { GeoPoint(it.latitude, it.longitude) }
@@ -935,7 +1254,7 @@ fun ContenidoDetalleZona(zona: InformacionZona) {
                             poligono.outlinePaint.strokeWidth = 3f
                             overlays.add(poligono)
                         } else {
-                            // Si no hay vértices (legacy), mostrar marcador
+                            // Zonas creadas antes del dibujo de polígonos solo tienen un punto
                             val marcador = Marker(this)
                             marcador.position = GeoPoint(zona.ubicacion.latitude, zona.ubicacion.longitude)
                             marcador.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)

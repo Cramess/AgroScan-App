@@ -11,10 +11,11 @@ data class InformacionZona(
     val ubicacion: LatLng,
     val hectareas: Double,
     val fechaSiembra: String = "",
+    val fechaCosecha: String = "",
     val observaciones: String = "",
     val estadoCultivo: String = "Pendiente",
     val uriFoto: String? = null,
-    val vertices: List<LatLng> = emptyList(), // Nuevos datos para el polígono
+    val vertices: List<LatLng> = emptyList(),
     val tipoSuelo: String = "Franco-Arcilloso",
     val phSuelo: Double = 6.8,
     val nivelNitrogeno: String = "Medio",
@@ -42,7 +43,7 @@ data class ResultadoAnalisis(
     val ubicacion: String,
     val temperatura: String,
     val humedad: String,
-    val radiacionUV: String, // Nuevo campo
+    val radiacionUV: String,
     val resumen: String,
     val estadoValidacion: String = "PENDIENTE", // PENDIENTE, VALIDADO_OK, CORREGIDO_AGRONOMO
     val observacionTecnico: String = "",
