@@ -49,6 +49,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 enum class ModoDeteccion(val etiqueta: String) {
     AUTOMATICO("Automático"), // Roboflow y, si falla (sin internet), modelo local
@@ -71,6 +72,8 @@ private data class CuentaLocal(
 const val ROL_TECNICO = "TÉCNICO AGRÓNOMO"
 
 private const val PREF_ANIMACIONES = "animaciones"
+private const val PREF_MODO_OSCURO = "modo_oscuro"
+private const val PREF_VIDRIO = "efecto_vidrio"
 
 private const val SESION_ACTIVA = "sesion_activa"
 private const val SESION_CUENTAS = "cuentas"
@@ -99,7 +102,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getDatabase(application)
     private val agroScanDao = database.agroScanDao()
     private val weatherService = WeatherApiService.create()
-    private val webApiService = ExternalWebApiService.create()
+    private val webApiService = ExternalWebApiService.create(BuildConfig.WEB_API_URL)
 
     var permisoUbicacionConcedido by mutableStateOf(false)
     var permisoCamaraConcedido by mutableStateOf(false)
@@ -286,8 +289,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return android.util.Base64.encodeToString(hash, android.util.Base64.NO_WRAP)
     }
     
-    var modoOscuroHabilitado by mutableStateOf(false)
-
     val zonas = mutableStateListOf<InformacionZona>()
 
     var datosClimaReales by mutableStateOf<DatosClima?>(null)
@@ -320,9 +321,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ubicacion = response.name,
                     temperatura = "${response.main.temp.toInt()}°C",
                     humedad = "${response.main.humidity}%",
-                    viento = "${response.wind.speed}km/h",
-                    uv = "UV --", // La API gratuita no siempre da UV
-                    lluvia = "0.0mm"
+                    // OpenWeather (units=metric) da el viento en m/s: 1 m/s = 3,6 km/h
+                    viento = "${(response.wind.speed * 3.6).roundToInt()} km/h",
+                    // El endpoint /weather no incluye índice UV; se marca como no disponible en vez de inventarlo
+                    uv = "UV N/D",
+                    lluvia = String.format(Locale.US, "%.1fmm", response.rain?.ultimaHora ?: 0.0)
                 )
                 ciudadUsuario = response.name
 
@@ -382,11 +385,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
-    fun agregarZona(zona: InformacionZona) {
+    /**
+     * El historial se agrupa y se borra por nombre de zona, así que el nombre debe ser único.
+     * Devuelve un mensaje de error o null si el nombre es válido.
+     */
+    private fun validarNombreZona(nombre: String, idPropio: Long?): String? {
+        val limpio = nombre.trim()
+        if (limpio.isEmpty()) return "Ingrese un nombre para la zona"
+        val repetida = zonas.any { it.id != idPropio && it.nombre.trim().equals(limpio, ignoreCase = true) }
+        return if (repetida) "Ya existe una zona llamada «$limpio»" else null
+    }
+
+    /** Guarda una zona nueva. Devuelve un mensaje de error o null si se aceptó. */
+    fun agregarZona(zonaNueva: InformacionZona): String? {
+        validarNombreZona(zonaNueva.nombre, idPropio = null)?.let { return it }
+        val zonaSinId = zonaNueva.copy(nombre = zonaNueva.nombre.trim(), id = 0)
         viewModelScope.launch {
-            agroScanDao.insertarZona(zona.toEntity())
+            val id = agroScanDao.insertarZona(zonaSinId.toEntity())
+            val zona = zonaSinId.copy(id = id)
             zonas.add(zona)
-            
+
             // Cada zona nueva deja un registro en el historial para que aparezca agrupada ahí
             val sdfFecha = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
             val sdfHora = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -407,51 +425,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 resumen = "Sin cambios detectados. La zona ha sido registrada exitosamente en el sistema."
             )
             
-            agroScanDao.insertarHistorial(resultado.toEntity())
-            historialAnalisis.add(0, resultado)
+            val idHistorial = agroScanDao.insertarHistorial(resultado.toEntity())
+            historialAnalisis.add(0, resultado.copy(id = idHistorial))
             refrescarWidget()
         }
+        return null
     }
 
     fun eliminarZona(zona: InformacionZona) {
         viewModelScope.launch {
-            val zonasLocal = agroScanDao.obtenerTodasLasZonas()
-            val entity = zonasLocal.find { it.nombre == zona.nombre }
-            if (entity != null) {
-                agroScanDao.eliminarZona(entity)
-                agroScanDao.eliminarHistorialPorZona(zona.nombre)
-                zonas.remove(zona)
-                historialAnalisis.removeAll { it.nombreZona == zona.nombre }
-                refrescarWidget()
-            }
+            agroScanDao.eliminarZonaPorId(zona.id)
+            agroScanDao.eliminarHistorialPorZona(zona.nombre)
+            zonas.removeAll { it.id == zona.id }
+            historialAnalisis.removeAll { it.nombreZona == zona.nombre }
+            refrescarWidget()
         }
     }
 
-    fun actualizarZona(zonaAntigua: InformacionZona, zonaNueva: InformacionZona) {
+    /** Guarda los cambios de una zona existente. Devuelve un mensaje de error o null si se aceptó. */
+    fun actualizarZona(zonaAntigua: InformacionZona, zonaEditada: InformacionZona): String? {
+        validarNombreZona(zonaEditada.nombre, idPropio = zonaAntigua.id)?.let { return it }
+        // Se conserva el id para que Room reemplace la fila en lugar de crear otra
+        val zonaNueva = zonaEditada.copy(nombre = zonaEditada.nombre.trim(), id = zonaAntigua.id)
         viewModelScope.launch {
-            val zonasLocal = agroScanDao.obtenerTodasLasZonas()
-            val entity = zonasLocal.find { it.nombre == zonaAntigua.nombre }
-            if (entity != null) {
-                // Se conserva el id para que Room reemplace la fila en lugar de crear otra
-                val nuevaEntity = zonaNueva.toEntity().copy(id = entity.id)
-                agroScanDao.insertarZona(nuevaEntity)
-            } else {
-                agroScanDao.insertarZona(zonaNueva.toEntity())
-            }
-            
-            val indice = zonas.indexOfFirst { it.nombre == zonaAntigua.nombre }
-            if (indice != -1) {
-                zonas[indice] = zonaNueva
-            } else {
-                val indiceNuevo = zonas.indexOfFirst { it.nombre == zonaNueva.nombre }
-                if (indiceNuevo != -1) {
-                    zonas[indiceNuevo] = zonaNueva
-                } else {
-                    zonas.add(zonaNueva)
+            agroScanDao.insertarZona(zonaNueva.toEntity())
+
+            if (zonaNueva.nombre != zonaAntigua.nombre) {
+                agroScanDao.renombrarZonaEnHistorial(zonaAntigua.nombre, zonaNueva.nombre)
+                for (i in historialAnalisis.indices) {
+                    val registro = historialAnalisis[i]
+                    if (registro.nombreZona == zonaAntigua.nombre) {
+                        historialAnalisis[i] = registro.copy(nombreZona = zonaNueva.nombre)
+                    }
                 }
             }
+
+            val indice = zonas.indexOfFirst { it.id == zonaAntigua.id }
+            if (indice != -1) zonas[indice] = zonaNueva else zonas.add(zonaNueva)
             refrescarWidget()
         }
+        return null
     }
 
     fun actualizarValidacionAnalisis(
@@ -461,25 +474,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         esDeficienciaNutricional: Boolean
     ) {
         viewModelScope.launch {
-            val historialLocal = agroScanDao.obtenerTodoElHistorial()
-            val entity = historialLocal.find { 
-                it.fecha == resultadoOriginal.fecha && 
-                it.hora == resultadoOriginal.hora && 
-                it.nombreZona == resultadoOriginal.nombreZona 
-            }
-            
             val resultadoActualizado = resultadoOriginal.copy(
                 estadoValidacion = nuevoEstado,
                 observacionTecnico = observacionTecnica,
                 esDeficienciaNutricional = esDeficienciaNutricional
             )
 
-            if (entity != null) {
-                val nuevaEntity = resultadoActualizado.toEntity().copy(id = entity.id)
-                agroScanDao.insertarHistorial(nuevaEntity)
+            // El id identifica el registro exacto (antes se buscaba por fecha + hora + zona y
+            // dos escaneos en el mismo minuto se confundían)
+            if (resultadoOriginal.id != 0L) {
+                agroScanDao.insertarHistorial(resultadoActualizado.toEntity())
             }
 
-            val index = historialAnalisis.indexOf(resultadoOriginal)
+            val index = historialAnalisis.indexOfFirst { it.id == resultadoOriginal.id }
             if (index != -1) {
                 historialAnalisis[index] = resultadoActualizado
             }
@@ -488,41 +495,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sincronizarConPlataformaWeb(onComplete: (Boolean, String) -> Unit) {
+        // Hoy solo se comprueba que el servidor responda (GET /health): el envío de zonas y diagnósticos
+        // aún no existe, así que nunca se informa como "sincronizado".
+        val servicio = webApiService
+        if (servicio == null) {
+            val msg = "Plataforma web no configurada: defina WEB_API_URL en local.properties."
+            mensajeEstadoSincronizacion = msg
+            onComplete(false, msg)
+            return
+        }
         viewModelScope.launch {
             estaSincronizandoWeb = true
-            mensajeEstadoSincronizacion = "Conectando con servidor Railway..."
-            try {
-                val response = webApiService.verificarConexion()
-                val totalZonas = zonas.size
-                val totalEscaneos = historialAnalisis.size
-                
+            mensajeEstadoSincronizacion = "Conectando con la plataforma web..."
+            val (exito, msg) = try {
+                val response = servicio.verificarConexion()
                 if (response.isSuccessful) {
-                    val body = response.body()
-                    val msgServer = body?.get("mensaje")?.toString() ?: "API Conectada"
-                    mensajeEstadoSincronizacion = "Railway API OK ($msgServer). $totalZonas zonas, $totalEscaneos diagnósticos procesados."
-                    estaSincronizandoWeb = false
-                    onComplete(true, "Conexión Railway exitosa: $msgServer ($totalZonas zonas y $totalEscaneos diagnósticos).")
+                    val msgServer = response.body()?.get("mensaje")?.toString() ?: "OK"
+                    true to "Servidor disponible ($msgServer). El envío de datos aún no está implementado."
                 } else {
-                    mensajeEstadoSincronizacion = "Conectado a Railway ($totalZonas zonas sincronizadas)."
-                    estaSincronizandoWeb = false
-                    onComplete(true, "Conexión a Railway establecida ($totalZonas zonas procesadas).")
+                    false to "El servidor respondió con error ${response.code()}."
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                val totalZonas = zonas.size
-                val totalEscaneos = historialAnalisis.size
-                estaSincronizandoWeb = false
-                mensajeEstadoSincronizacion = "Sincronización local ($totalZonas zonas)."
-                onComplete(true, "Datos listos ($totalZonas zonas, $totalEscaneos diagnósticos).")
+                false to "No se pudo conectar con la plataforma web: ${e.message ?: "sin conexión"}."
             }
+            estaSincronizandoWeb = false
+            mensajeEstadoSincronizacion = msg
+            onComplete(exito, msg)
         }
     }
 
+    // Preferencias de la interfaz (tema y animaciones): se recuerdan entre sesiones
+    private val prefsApp = application.getSharedPreferences("agroscan_preferencias", Context.MODE_PRIVATE)
+
+    // Declarado después de prefsApp: Kotlin inicializa las propiedades en orden
+    var modoOscuroHabilitado by mutableStateOf(prefsApp.getBoolean(PREF_MODO_OSCURO, false))
+        private set
+
     fun alternarTema(habilitado: Boolean) {
         modoOscuroHabilitado = habilitado
+        prefsApp.edit().putBoolean(PREF_MODO_OSCURO, habilitado).apply()
     }
-
-    // Animaciones de la interfaz: se recuerdan entre sesiones
-    private val prefsApp = application.getSharedPreferences("agroscan_preferencias", Context.MODE_PRIVATE)
 
     var animacionesHabilitadas by mutableStateOf(prefsApp.getBoolean(PREF_ANIMACIONES, true))
         private set
@@ -530,6 +544,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun alternarAnimaciones(activas: Boolean) {
         animacionesHabilitadas = activas
         prefsApp.edit().putBoolean(PREF_ANIMACIONES, activas).apply()
+    }
+
+    // Vidrio esmerilado en vivo (desenfoque por GPU, Android 12+); se puede apagar en equipos modestos
+    var vidrioHabilitado by mutableStateOf(prefsApp.getBoolean(PREF_VIDRIO, true))
+        private set
+
+    fun alternarVidrio(activo: Boolean) {
+        vidrioHabilitado = activo
+        prefsApp.edit().putBoolean(PREF_VIDRIO, activo).apply()
     }
 
     fun cerrarSesion() {
@@ -606,8 +629,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "etiqueta del modelo: ${escaneo.etiquetaModelo}). Viento: ${datosClimaReales?.viento ?: "--"}."
             )
 
-            agroScanDao.insertarHistorial(resultado.toEntity())
-            historialAnalisis.add(0, resultado)
+            val id = agroScanDao.insertarHistorial(resultado.toEntity())
+            historialAnalisis.add(0, resultado.copy(id = id))
             refrescarWidget()
         }
     }

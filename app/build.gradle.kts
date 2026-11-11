@@ -29,11 +29,21 @@ android {
 
         buildConfigField("String", "ROBOFLOW_API_KEY", "\"${claveLocal("ROBOFLOW_API_KEY")}\"")
         buildConfigField("String", "OPENWEATHER_API_KEY", "\"${claveLocal("OPENWEATHER_API_KEY")}\"")
+        // URL base de la plataforma web (p. ej. https://mi-api.up.railway.app/); vacía = sin sincronización
+        buildConfigField("String", "WEB_API_URL", "\"${claveLocal("WEB_API_URL")}\"")
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 elimina y optimiza código (Compose corre mucho más fluido en release que en debug)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            // Firma de depuración para poder instalar y probar el APK release; cambiar por la de publicación
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {

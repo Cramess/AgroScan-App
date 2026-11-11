@@ -1,5 +1,6 @@
 package com.tecsup.agroscan.Services
 
+import com.google.gson.annotations.SerializedName
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -9,7 +10,8 @@ data class WeatherResponse(
     val main: Main,
     val wind: Wind,
     val name: String,
-    val weather: List<WeatherDescription>
+    val weather: List<WeatherDescription>,
+    val rain: Rain? = null   // OpenWeather omite el bloque cuando no llueve
 )
 
 data class Main(
@@ -17,8 +19,13 @@ data class Main(
     val humidity: Int
 )
 
+/** Con units=metric la velocidad llega en metros por segundo. */
 data class Wind(
     val speed: Double
+)
+
+data class Rain(
+    @SerializedName("1h") val ultimaHora: Double? = null   // mm de lluvia en la última hora
 )
 
 data class WeatherDescription(

@@ -7,6 +7,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.animation.core.snap
+import com.tecsup.agroscan.ui.utils.rememberApariciones
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,7 +36,8 @@ fun PantallaHistorial(viewModel: MainViewModel) {
 
     var analisisParaValidar by remember { mutableStateOf<ResultadoAnalisis?>(null) }
 
-    val historialFiltrado = remember(consultaBusqueda, viewModel.historialAnalisis.size) {
+    // Se recalcula en cada composición: con remember(tamaño) no se reflejaba una validación (mismo tamaño, otro contenido)
+    val historialFiltrado = run {
         if (consultaBusqueda.isEmpty()) {
             viewModel.historialAnalisis
         } else {
@@ -47,6 +51,7 @@ fun PantallaHistorial(viewModel: MainViewModel) {
 
     val historialAgrupado = historialFiltrado.groupBy { it.nombreZona }
     val animaciones = LocalAnimaciones.current
+    val apariciones = rememberApariciones()
 
     Column(
         modifier = Modifier
@@ -94,10 +99,12 @@ fun PantallaHistorial(viewModel: MainViewModel) {
                 contentPadding = PaddingValues(bottom = 140.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Cada análisis es su propio elemento perezoso (antes una zona expandida componía todos sus
+                // análisis de golpe) y lleva clave estable, así el scroll reutiliza filas en lugar de recrearlas
                 historialAgrupado.entries.forEachIndexed { indiceZona, (zona, analisisEnZona) ->
-                    item {
+                    item(key = "zona:$zona", contentType = "zona") {
                         val estaExpandido = zonasExpandidas[zona] ?: false
-                        Box(Modifier.aparicion(indiceZona)) {
+                        Box(Modifier.animateItem().aparicion(indiceZona, clave = "zona:$zona", vistos = apariciones)) {
                             TarjetaZonaHistorial(
                                 nombreZona = zona,
                                 cantidadAnalisis = analisisEnZona.size,
@@ -107,24 +114,25 @@ fun PantallaHistorial(viewModel: MainViewModel) {
                         }
                     }
 
-                    item {
-                        AnimatedVisibility(
-                            visible = zonasExpandidas[zona] ?: false,
-                            enter = if (animaciones) expandVertically(tween(420, easing = CurvaSuave)) + fadeIn(tween(300, 120)) else EnterTransition.None,
-                            exit = if (animaciones) shrinkVertically(tween(320, easing = CurvaSuave)) + fadeOut(tween(160)) else ExitTransition.None
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(start = 8.dp, top = 8.dp, bottom = 16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    if (zonasExpandidas[zona] == true) {
+                        itemsIndexed(
+                            analisisEnZona,
+                            key = { i, analisis -> if (analisis.id != 0L) analisis.id else "sin-id:$zona:$i" },
+                            contentType = { _, _ -> "analisis" }
+                        ) { _, analisis ->
+                            Box(
+                                Modifier
+                                    .animateItem(
+                                        fadeInSpec = if (animaciones) tween(300, easing = CurvaSuave) else snap(),
+                                        placementSpec = if (animaciones) tween(380, easing = CurvaSuave) else snap(),
+                                        fadeOutSpec = if (animaciones) tween(160) else snap()
+                                    )
+                                    .padding(start = 8.dp)
                             ) {
-                                analisisEnZona.forEachIndexed { i, analisis ->
-                                    Box(Modifier.aparicion(i)) {
-                                        TarjetaHistorialCompacta(
-                                            analisis = analisis,
-                                            alEditarValidacion = { analisisParaValidar = analisis }
-                                        )
-                                    }
-                                }
+                                TarjetaHistorialCompacta(
+                                    analisis = analisis,
+                                    alEditarValidacion = { analisisParaValidar = analisis }
+                                )
                             }
                         }
                     }

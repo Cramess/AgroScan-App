@@ -58,6 +58,10 @@ import com.tecsup.agroscan.ui.utils.aparicion
 import com.tecsup.agroscan.ui.utils.especAnimacion
 import com.tecsup.agroscan.ui.utils.CurvaSuave
 import com.tecsup.agroscan.ui.utils.LocalAnimaciones
+import com.tecsup.agroscan.ui.utils.FondoVidrio
+import com.tecsup.agroscan.ui.utils.PanelVidrio
+import com.tecsup.agroscan.ui.utils.fuenteVidrio
+import com.tecsup.agroscan.ui.utils.rememberFondoVidrio
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.draw.clip
@@ -69,10 +73,15 @@ import java.util.*
 fun PantallaPanelControl(
     viewModel: MainViewModel,
     initialTab: Int = 0,
+    solicitudCamara: Int = 0,   // Cambia cada vez que el widget pide abrir la cámara con la app ya abierta
     alSolicitarUbicacion: () -> Unit = {},
     alSolicitarCamara: () -> Unit = {}
 ) {
     var itemSeleccionado by remember { mutableIntStateOf(initialTab) }
+    LaunchedEffect(solicitudCamara) {
+        if (solicitudCamara > 0) itemSeleccionado = 1
+    }
+    val contextoPanel = androidx.compose.ui.platform.LocalContext.current
     var zonaSeleccionada by remember { mutableStateOf<InformacionZona?>(null) }
     var mostrarHojaDetalle by remember { mutableStateOf(false) }
     var mostrarHojaAgregar by remember { mutableStateOf(false) }
@@ -94,8 +103,12 @@ fun PantallaPanelControl(
     val colorTextoNav = MaterialTheme.colorScheme.primary
     val animaciones = LocalAnimaciones.current
 
+    // Lo que se ve (desenfocado) a través de la barra de navegación de vidrio
+    val fondoApp = rememberFondoVidrio()
+
     Box(modifier = Modifier.fillMaxSize().background(colorFondo)) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        // fuenteVidrio va antes que background para que el fondo también quede dentro de la capa capturada
+        Column(modifier = Modifier.fillMaxSize().fuenteVidrio(fondoApp).background(colorFondo)) {
             Box(modifier = Modifier.weight(1f)) {
                 AnimatedContent(
                     targetState = itemSeleccionado,
@@ -146,11 +159,12 @@ fun PantallaPanelControl(
             }
         }
 
-        Surface(
+        PanelVidrio(
+            fondo = fondoApp,
             modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 12.dp).fillMaxWidth().height(72.dp),
-            shape = RoundedCornerShape(36.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-            shadowElevation = 10.dp
+            forma = RoundedCornerShape(36.dp),
+            opacidadTinte = 0.62f,
+            opacidadSinVidrio = 0.98f
         ) {
             Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
                 val itemsNav = listOf("Inicio", "Escaneo", "Historial", "Perfil")
@@ -218,10 +232,14 @@ fun PantallaPanelControl(
                         modoDibujoActivo = true
                     },
                     alAgregar = { nuevaZona ->
-                        viewModel.agregarZona(nuevaZona)
-                        nombreEnProceso = ""
-                        cultivoEnProceso = ""
-                        mostrarHojaAgregar = false
+                        val error = viewModel.agregarZona(nuevaZona)
+                        if (error != null) {
+                            android.widget.Toast.makeText(contextoPanel, error, android.widget.Toast.LENGTH_LONG).show()
+                        } else {
+                            nombreEnProceso = ""
+                            cultivoEnProceso = ""
+                            mostrarHojaAgregar = false
+                        }
                     }
                 )
             }
@@ -250,11 +268,15 @@ fun PantallaPanelControl(
                         modoDibujoActivo = true
                     },
                     alActualizar = { zonaActualizada ->
-                        viewModel.actualizarZona(zonaSeleccionada!!, zonaActualizada)
-                        nombreEnProceso = ""
-                        cultivoEnProceso = ""
-                        modoEdicionPoligono = false
-                        mostrarHojaEditar = false
+                        val error = viewModel.actualizarZona(zonaSeleccionada!!, zonaActualizada)
+                        if (error != null) {
+                            android.widget.Toast.makeText(contextoPanel, error, android.widget.Toast.LENGTH_LONG).show()
+                        } else {
+                            nombreEnProceso = ""
+                            cultivoEnProceso = ""
+                            modoEdicionPoligono = false
+                            mostrarHojaEditar = false
+                        }
                     }
                 )
             }
@@ -302,7 +324,7 @@ private object EsriSatelite : OnlineTileSourceBase(
                 MapTileIndex.getY(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex)
 }
 
-private fun iconoVertice(contexto: android.content.Context, numero: Int, alerta: Boolean): android.graphics.drawable.Drawable {
+private fun iconoVertice(contexto: android.content.Context, numero: Int, alerta: Boolean): android.graphics.Bitmap {
     val densidad = contexto.resources.displayMetrics.density
     val lado = (30 * densidad).toInt()
     val bitmap = android.graphics.Bitmap.createBitmap(lado, lado, android.graphics.Bitmap.Config.ARGB_8888)
@@ -321,7 +343,7 @@ private fun iconoVertice(contexto: android.content.Context, numero: Int, alerta:
     pincel.typeface = android.graphics.Typeface.DEFAULT_BOLD
     pincel.textAlign = android.graphics.Paint.Align.CENTER
     lienzo.drawText(numero.toString(), radio, radio - (pincel.descent() + pincel.ascent()) / 2, pincel)
-    return android.graphics.drawable.BitmapDrawable(contexto.resources, bitmap)
+    return bitmap
 }
 
 @SuppressLint("MissingPermission")
@@ -361,6 +383,10 @@ fun PantallaDibujoParcela(
 
     var satelite by rememberSaveable { mutableStateOf(true) }
     var mapa by remember { mutableStateOf<MapView?>(null) }
+    val fondoMapa = rememberFondoVidrio()
+    // Los iconos numerados de los vértices se dibujan una sola vez; antes se creaba un bitmap nuevo
+    // por vértice en cada actualización del mapa
+    val cacheIconos = remember { HashMap<Pair<Int, Boolean>, android.graphics.Bitmap>() }
     // Puntos en el orden en que se tocaron, para que "deshacer" quite el último aunque se haya insertado en medio
     val pilaDeshacer = remember { mutableStateListOf<LatLng>() }
 
@@ -433,7 +459,10 @@ fun PantallaDibujoParcela(
                     val marcador = Marker(mapView)
                     marcador.position = GeoPoint(latLng.latitude, latLng.longitude)
                     marcador.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    marcador.icon = iconoVertice(contexto, i + 1, bordesCruzados)
+                    val bitmapIcono = cacheIconos.getOrPut((i + 1) to bordesCruzados) {
+                        iconoVertice(contexto, i + 1, bordesCruzados)
+                    }
+                    marcador.icon = android.graphics.drawable.BitmapDrawable(contexto.resources, bitmapIcono)
                     marcador.setInfoWindow(null)
                     // Mantener presionado un punto para moverlo
                     marcador.isDraggable = true
@@ -451,13 +480,14 @@ fun PantallaDibujoParcela(
                 }
                 mapView.invalidate()
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize().fuenteVidrio(fondoMapa)
         )
 
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            shadowElevation = 6.dp,
+        PanelVidrio(
+            fondo = fondoMapa,
+            forma = RoundedCornerShape(24.dp),
+            opacidadTinte = 0.6f,
+            opacidadSinVidrio = 0.96f,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -521,14 +551,14 @@ fun PantallaDibujoParcela(
             modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp, top = 80.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            BotonMapa(if (satelite) Icons.Default.Map else Icons.Default.Satellite, if (satelite) "Ver mapa" else "Ver satélite") {
+            BotonMapa(fondoMapa, if (satelite) Icons.Default.Map else Icons.Default.Satellite, if (satelite) "Ver mapa" else "Ver satélite") {
                 satelite = !satelite
             }
-            BotonMapa(Icons.Default.MyLocation, "Mi ubicación") { mapa?.let { centrarEnUbicacion(contexto, it) } }
-            BotonMapa(Icons.Default.Add, "Acercar") { mapa?.controller?.zoomIn() }
-            BotonMapa(Icons.Default.Remove, "Alejar") { mapa?.controller?.zoomOut() }
+            BotonMapa(fondoMapa, Icons.Default.MyLocation, "Mi ubicación") { mapa?.let { centrarEnUbicacion(contexto, it) } }
+            BotonMapa(fondoMapa, Icons.Default.Add, "Acercar") { mapa?.controller?.zoomIn() }
+            BotonMapa(fondoMapa, Icons.Default.Remove, "Alejar") { mapa?.controller?.zoomOut() }
             AnimatedVisibility(visible = puntos.isNotEmpty()) {
-                BotonMapa(Icons.AutoMirrored.Filled.Undo, "Deshacer") {
+                BotonMapa(fondoMapa, Icons.AutoMirrored.Filled.Undo, "Deshacer") {
                     val ultimo = pilaDeshacer.removeLastOrNull()
                     if (ultimo != null && puntos.remove(ultimo)) return@BotonMapa
                     if (puntos.isNotEmpty()) puntos.removeAt(puntos.lastIndex)
@@ -594,15 +624,16 @@ private fun MedidaDibujo(valor: String, etiqueta: String, destacada: Boolean = f
 }
 
 @Composable
-private fun BotonMapa(icono: ImageVector, descripcion: String, alPulsar: () -> Unit) {
-    SmallFloatingActionButton(
-        onClick = alPulsar,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.primary,
-        shape = CircleShape,
-        modifier = Modifier.bounceClick()
+private fun BotonMapa(fondo: FondoVidrio, icono: ImageVector, descripcion: String, alPulsar: () -> Unit) {
+    PanelVidrio(
+        fondo = fondo,
+        forma = CircleShape,
+        opacidadTinte = 0.6f,
+        opacidadSinVidrio = 1f,
+        alineacion = Alignment.Center,
+        modifier = Modifier.size(44.dp).bounceClick().clip(CircleShape).clickable(onClick = alPulsar)
     ) {
-        Icon(icono, descripcion)
+        Icon(icono, descripcion, tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -751,7 +782,7 @@ fun ContenidoPrincipalPanelControl(
         ) {
             Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text(if (viewModel.estaSincronizandoWeb) "Sincronizando con Web..." else "Sincronizar Datos a App Web", fontSize = 13.sp)
+            Text(if (viewModel.estaSincronizandoWeb) "Conectando con la App Web..." else "Comprobar conexión con App Web", fontSize = 13.sp)
         }
 
         Spacer(modifier = Modifier.height(24.dp))

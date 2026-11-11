@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.google.android.gms.maps.model.LatLng
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -33,9 +34,12 @@ data class ZonaEntity(
     val nivelPotasio: String = "Medio"
 )
 
+// Gson es seguro entre hilos: una sola instancia en vez de crear una por cada fila leída
+private val gson = Gson()
+private val tipoListaLatLng = object : TypeToken<List<LatLng>>() {}.type
+
 fun ZonaEntity.toDomain(): InformacionZona {
-    val listType = object : TypeToken<List<LatLng>>() {}.type
-    val vertices: List<LatLng> = Gson().fromJson(verticesJson, listType) ?: emptyList()
+    val vertices: List<LatLng> = gson.fromJson(verticesJson, tipoListaLatLng) ?: emptyList()
     return InformacionZona(
         nombre = nombre,
         cultivo = cultivo,
@@ -53,15 +57,17 @@ fun ZonaEntity.toDomain(): InformacionZona {
         phSuelo = phSuelo,
         nivelNitrogeno = nivelNitrogeno,
         nivelFosforo = nivelFosforo,
-        nivelPotasio = nivelPotasio
+        nivelPotasio = nivelPotasio,
+        id = id
     )
 }
 
 fun InformacionZona.toEntity(): ZonaEntity {
     return ZonaEntity(
+        id = id,
         nombre = nombre,
         cultivo = cultivo,
-        colorArgb = color.hashCode(),
+        colorArgb = color.toArgb(),
         diasParaCosecha = diasParaCosecha,
         latitud = ubicacion.latitude,
         longitud = ubicacion.longitude,
@@ -71,7 +77,7 @@ fun InformacionZona.toEntity(): ZonaEntity {
         observaciones = observaciones,
         estadoCultivo = estadoCultivo,
         uriFoto = uriFoto,
-        verticesJson = Gson().toJson(vertices),
+        verticesJson = gson.toJson(vertices),
         tipoSuelo = tipoSuelo,
         phSuelo = phSuelo,
         nivelNitrogeno = nivelNitrogeno,
@@ -116,12 +122,14 @@ fun HistorialEntity.toDomain(): ResultadoAnalisis {
         resumen = resumen,
         estadoValidacion = estadoValidacion,
         observacionTecnico = observacionTecnico,
-        esDeficienciaNutricional = esDeficienciaNutricional
+        esDeficienciaNutricional = esDeficienciaNutricional,
+        id = id
     )
 }
 
 fun ResultadoAnalisis.toEntity(): HistorialEntity {
     return HistorialEntity(
+        id = id,
         titulo = titulo,
         nombrePlanta = nombrePlanta,
         nombreZona = nombreZona,

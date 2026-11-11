@@ -20,7 +20,8 @@ data class InformacionZona(
     val phSuelo: Double = 6.8,
     val nivelNitrogeno: String = "Medio",
     val nivelFosforo: String = "Medio",
-    val nivelPotasio: String = "Medio"
+    val nivelPotasio: String = "Medio",
+    val id: Long = 0   // Clave de Room; 0 mientras la zona no se ha guardado
 )
 
 data class DatosClima(
@@ -47,7 +48,8 @@ data class ResultadoAnalisis(
     val resumen: String,
     val estadoValidacion: String = "PENDIENTE", // PENDIENTE, VALIDADO_OK, CORREGIDO_AGRONOMO
     val observacionTecnico: String = "",
-    val esDeficienciaNutricional: Boolean = false
+    val esDeficienciaNutricional: Boolean = false,
+    val id: Long = 0   // Clave de Room; 0 mientras el registro no se ha guardado
 )
 
 data class Usuario(

@@ -44,6 +44,16 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import com.tecsup.agroscan.ui.utils.PanelVidrio
+import com.tecsup.agroscan.ui.utils.fuenteVidrio
+import com.tecsup.agroscan.ui.utils.rememberFondoVidrio
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlin.coroutines.resume
@@ -75,6 +85,25 @@ fun PantallaIA(viewModel: MainViewModel) {
     val vistaPrevia = remember {
         PreviewView(contexto).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
+            // TextureView en lugar de SurfaceView: así la imagen de la cámara se puede desenfocar
+            // en vivo detrás de los paneles de vidrio (un SurfaceView no se puede capturar)
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+    val casoPreview = remember { Preview.Builder().build() }
+    val fondoCamara = rememberFondoVidrio()
+
+    // Al salir de la pestaña se libera la cámara: antes seguía encendida (y gastando GPU y batería)
+    // mientras se navegaba por el resto de la app, lo que restaba fluidez a todas las pantallas
+    DisposableEffect(Unit) {
+        onDispose {
+            if (camaraProductor.isDone) {
+                try {
+                    camaraProductor.get().unbind(casoPreview, capturaImagen)
+                } catch (e: Exception) {
+                    Log.w("PantallaIA", "No se pudo liberar la cámara", e)
+                }
+            }
         }
     }
 
@@ -104,17 +133,15 @@ fun PantallaIA(viewModel: MainViewModel) {
                     }, ContextCompat.getMainExecutor(contexto))
                 }
 
-                val preview = Preview.Builder().build().also {
-                    it.surfaceProvider = vistaPrevia.surfaceProvider
-                }
+                casoPreview.surfaceProvider = vistaPrevia.surfaceProvider
 
                 val selector = CameraSelector.DEFAULT_BACK_CAMERA
-                
+
                 proveedor.unbindAll()
                 camara = proveedor.bindToLifecycle(
                     cicloVida,
                     selector,
-                    preview,
+                    casoPreview,
                     capturaImagen
                 )
             } catch (e: Exception) {
@@ -127,7 +154,7 @@ fun PantallaIA(viewModel: MainViewModel) {
         if (viewModel.permisoCamaraConcedido) {
             AndroidView(
                 factory = { vistaPrevia },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().fuenteVidrio(fondoCamara)
             )
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -141,48 +168,8 @@ fun PantallaIA(viewModel: MainViewModel) {
         }
 
         if (viewModel.permisoCamaraConcedido) {
-            val animaciones = LocalAnimaciones.current
-            val transicion = rememberInfiniteTransition(label = "escaneo")
-            // El borde "respira" para invitar a encuadrar la hoja; la línea barre el recuadro al analizar
-            val respiracion by transicion.animateFloat(
-                0.35f, 0.8f, infiniteRepeatable(tween(1800, easing = CurvaSuave), RepeatMode.Reverse), label = "respiracion"
-            )
-            val barrido by transicion.animateFloat(
-                0f, 1f, infiniteRepeatable(tween(1300, easing = CurvaSuave), RepeatMode.Reverse), label = "barrido"
-            )
-            val verdeClaro = Color(0xFFC0E0A0)
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Surface(
-                    modifier = Modifier.size(280.dp),
-                    color = Color.Transparent,
-                    shape = RoundedCornerShape(32.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        2.dp, verdeClaro.copy(alpha = if (animaciones && !analizando) respiracion else 0.6f)
-                    )
-                ) {
-                    if (analizando) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            if (animaciones) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(56.dp)
-                                        .offset(y = 224.dp * barrido)
-                                        .background(
-                                            Brush.verticalGradient(
-                                                listOf(Color.Transparent, verdeClaro.copy(alpha = 0.25f), verdeClaro.copy(alpha = 0.9f))
-                                            )
-                                        )
-                                )
-                            } else {
-                                LinearProgressIndicator(
-                                    color = verdeClaro,
-                                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)
-                                )
-                            }
-                        }
-                    }
-                }
+                MarcoEscaneo(analizando = analizando)
             }
         }
 
@@ -193,9 +180,12 @@ fun PantallaIA(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(20.dp),
+                    PanelVidrio(
+                        fondo = fondoCamara,
+                        forma = RoundedCornerShape(20.dp),
+                        tinte = Color.Black,
+                        opacidadTinte = 0.28f,
+                        opacidadSinVidrio = 0.6f,
                         modifier = Modifier
                             .bounceClick()
                             .clickable { mostrarSelectorZonas = true }
@@ -253,31 +243,37 @@ fun PantallaIA(viewModel: MainViewModel) {
                     }
 
                     Row {
-                        IconButton(
-                            onClick = { mostrarConsejo = !mostrarConsejo },
-                            modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape).bounceClick()
+                        PanelVidrio(
+                            fondo = fondoCamara, forma = CircleShape, tinte = Color.Black,
+                            opacidadTinte = 0.28f, opacidadSinVidrio = 0.5f, modifier = Modifier.bounceClick()
                         ) {
-                            Icon(Icons.Default.Info, "Información", tint = if (mostrarConsejo) Color(0xFFC0E0A0) else Color.White)
+                            IconButton(onClick = { mostrarConsejo = !mostrarConsejo }) {
+                                Icon(Icons.Default.Info, "Información", tint = if (mostrarConsejo) Color(0xFFC0E0A0) else Color.White)
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))
 
-                        IconButton(
-                            onClick = {
-                                modoFlash = when(modoFlash) {
-                                    ImageCapture.FLASH_MODE_AUTO -> ImageCapture.FLASH_MODE_ON
-                                    ImageCapture.FLASH_MODE_ON -> ImageCapture.FLASH_MODE_OFF
-                                    else -> ImageCapture.FLASH_MODE_AUTO
-                                }
-                            },
-                            modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape).bounceClick()
+                        PanelVidrio(
+                            fondo = fondoCamara, forma = CircleShape, tinte = Color.Black,
+                            opacidadTinte = 0.28f, opacidadSinVidrio = 0.5f, modifier = Modifier.bounceClick()
                         ) {
-                            val iconoFlash = when(modoFlash) {
-                                ImageCapture.FLASH_MODE_AUTO -> Icons.Default.FlashAuto
-                                ImageCapture.FLASH_MODE_ON -> Icons.Default.FlashOn
-                                else -> Icons.Default.FlashOff
+                            IconButton(
+                                onClick = {
+                                    modoFlash = when(modoFlash) {
+                                        ImageCapture.FLASH_MODE_AUTO -> ImageCapture.FLASH_MODE_ON
+                                        ImageCapture.FLASH_MODE_ON -> ImageCapture.FLASH_MODE_OFF
+                                        else -> ImageCapture.FLASH_MODE_AUTO
+                                    }
+                                }
+                            ) {
+                                val iconoFlash = when(modoFlash) {
+                                    ImageCapture.FLASH_MODE_AUTO -> Icons.Default.FlashAuto
+                                    ImageCapture.FLASH_MODE_ON -> Icons.Default.FlashOn
+                                    else -> Icons.Default.FlashOff
+                                }
+                                Icon(iconoFlash, "Flash", tint = if (modoFlash != ImageCapture.FLASH_MODE_OFF) Color.Yellow else Color.White)
                             }
-                            Icon(iconoFlash, "Flash", tint = if (modoFlash != ImageCapture.FLASH_MODE_OFF) Color.Yellow else Color.White)
                         }
                     }
                 }
@@ -289,9 +285,12 @@ fun PantallaIA(viewModel: MainViewModel) {
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically()
                 ) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(16.dp),
+                    PanelVidrio(
+                        fondo = fondoCamara,
+                        forma = RoundedCornerShape(16.dp),
+                        tinte = Color.Black,
+                        opacidadTinte = 0.3f,
+                        opacidadSinVidrio = 0.6f,
                         modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
                         Text(
@@ -340,9 +339,12 @@ fun PantallaIA(viewModel: MainViewModel) {
                 val zonaParaAnalisis = if (modoAutomaticoGPS) zonaDetectadaGPS else zonaSeleccionadaManual
 
                 // Modo de detección: automático (nube con respaldo local), solo nube o solo local
-                Surface(
-                    color = Color.Black.copy(alpha = 0.6f),
-                    shape = RoundedCornerShape(20.dp),
+                PanelVidrio(
+                    fondo = fondoCamara,
+                    forma = RoundedCornerShape(20.dp),
+                    tinte = Color.Black,
+                    opacidadTinte = 0.28f,
+                    opacidadSinVidrio = 0.6f,
                     modifier = Modifier
                         .bounceClick()
                         .clickable(enabled = !analizando) { viewModel.alternarModoDeteccion() }
@@ -387,6 +389,67 @@ fun PantallaIA(viewModel: MainViewModel) {
             }
             
             Spacer(modifier = Modifier.height(100.dp))
+        }
+    }
+}
+
+/**
+ * Recuadro de encuadre: el borde "respira" para invitar a encuadrar la hoja y una línea lo barre al analizar.
+ * Los valores animados se leen solo al dibujar (drawBehind / graphicsLayer): antes se leían al componer y
+ * toda la pantalla de escaneo se recomponía unas 60 veces por segundo.
+ */
+@Composable
+private fun MarcoEscaneo(analizando: Boolean) {
+    val animaciones = LocalAnimaciones.current
+    val verdeClaro = Color(0xFFC0E0A0)
+    val forma = RoundedCornerShape(32.dp)
+
+    Box(modifier = Modifier.size(280.dp)) {
+        if (animaciones) {
+            val transicion = rememberInfiniteTransition(label = "escaneo")
+            val respiracion = transicion.animateFloat(
+                0.35f, 0.8f, infiniteRepeatable(tween(1800, easing = CurvaSuave), RepeatMode.Reverse), label = "respiracion"
+            )
+            val barrido = transicion.animateFloat(
+                0f, 1f, infiniteRepeatable(tween(1300, easing = CurvaSuave), RepeatMode.Reverse), label = "barrido"
+            )
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .drawBehind {
+                        val grosor = 2.dp.toPx()
+                        drawRoundRect(
+                            color = verdeClaro.copy(alpha = if (analizando) 0.6f else respiracion.value),
+                            topLeft = Offset(grosor / 2, grosor / 2),
+                            size = Size(size.width - grosor, size.height - grosor),
+                            cornerRadius = CornerRadius(32.dp.toPx() - grosor / 2),
+                            style = Stroke(grosor)
+                        )
+                    }
+            )
+            if (analizando) {
+                Box(Modifier.matchParentSize().clip(forma)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .graphicsLayer { translationY = 224.dp.toPx() * barrido.value }
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, verdeClaro.copy(alpha = 0.25f), verdeClaro.copy(alpha = 0.9f))
+                                )
+                            )
+                    )
+                }
+            }
+        } else {
+            Box(Modifier.matchParentSize().border(2.dp, verdeClaro.copy(alpha = 0.6f), forma))
+            if (analizando) {
+                LinearProgressIndicator(
+                    color = verdeClaro,
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 24.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 }

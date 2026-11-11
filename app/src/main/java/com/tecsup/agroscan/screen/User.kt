@@ -33,6 +33,7 @@ import com.tecsup.agroscan.viewmodel.MainViewModel
 import com.tecsup.agroscan.ui.utils.bounceClick
 import com.tecsup.agroscan.ui.utils.aparicion
 import com.tecsup.agroscan.ui.utils.NumeroAnimado
+import com.tecsup.agroscan.ui.utils.vidrioSoportado
 
 @Composable
 fun PantallaUsuario(viewModel: MainViewModel) {
@@ -233,6 +234,29 @@ fun PantallaUsuario(viewModel: MainViewModel) {
                     Switch(
                         checked = viewModel.animacionesHabilitadas,
                         onCheckedChange = { viewModel.alternarAnimaciones(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MaterialTheme.colorScheme.primary)
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.BlurOn, null, tint = Color.Gray)
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Efecto esmerilado", color = verdeOscuro)
+                        Text(
+                            if (vidrioSoportado) "Vidrio desenfocado en vivo en barras y botones"
+                            else "Requiere Android 12 o superior",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = viewModel.vidrioHabilitado && vidrioSoportado,
+                        enabled = vidrioSoportado,
+                        onCheckedChange = { viewModel.alternarVidrio(it) },
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MaterialTheme.colorScheme.primary)
                     )
                 }

@@ -7,7 +7,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
@@ -34,39 +38,48 @@ val CurvaSuave = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 fun <T> especAnimacion(duracionMs: Int = 350, retrasoMs: Int = 0): AnimationSpec<T> =
     if (LocalAnimaciones.current) tween(duracionMs, retrasoMs, CurvaSuave) else snap()
 
-enum class ButtonState { Pressed, Idle }
-
+/**
+ * Encoge levemente el elemento mientras se mantiene pulsado.
+ * Un solo bucle de gestos (no se reinicia en cada toque) y la escala se lee solo al dibujar,
+ * así pulsar no recompone el botón.
+ */
 fun Modifier.bounceClick() = composed {
     if (!LocalAnimaciones.current) return@composed this
-    var buttonState by remember { mutableStateOf(ButtonState.Idle) }
-    val scale by animateFloatAsState(if (buttonState == ButtonState.Pressed) 0.95f else 1f, label = "bounceScale")
+    val escala = remember { Animatable(1f) }
+    val alcance = rememberCoroutineScope()
 
     this
         .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
+            scaleX = escala.value
+            scaleY = escala.value
         }
-        .pointerInput(buttonState) {
-            awaitPointerEventScope {
-                buttonState = if (buttonState == ButtonState.Pressed) {
-                    waitForUpOrCancellation()
-                    ButtonState.Idle
-                } else {
-                    awaitFirstDown(false)
-                    ButtonState.Pressed
-                }
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                alcance.launch { escala.animateTo(0.95f, spring(stiffness = Spring.StiffnessMedium)) }
+                waitForUpOrCancellation()
+                alcance.launch { escala.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium)) }
             }
         }
 }
 
+/** Claves de los elementos que ya hicieron su entrada; ver [aparicion]. */
+@Composable
+fun rememberApariciones(): MutableSet<Any> = remember { mutableSetOf() }
+
 /**
  * Entrada escalonada: el elemento aparece con un fundido y sube unos píxeles.
  * [indice] retrasa cada elemento de una lista para que lleguen uno tras otro.
+ * En listas perezosas pase [clave] y [vistos]: así un elemento que vuelve a la pantalla al hacer
+ * scroll no repite la animación (antes cada fila reaparecía con retraso y el scroll se veía a saltos).
  */
-fun Modifier.aparicion(indice: Int = 0) = composed {
+fun Modifier.aparicion(indice: Int = 0, clave: Any? = null, vistos: MutableSet<Any>? = null) = composed {
     if (!LocalAnimaciones.current) return@composed this
-    val progreso = remember { Animatable(0f) }
+    val yaVisto = clave != null && vistos != null && clave in vistos
+    val progreso = remember { Animatable(if (yaVisto) 1f else 0f) }
     LaunchedEffect(Unit) {
+        if (clave != null) vistos?.add(clave)
+        if (progreso.value >= 1f) return@LaunchedEffect
         delay(indice.coerceAtMost(8) * 55L)
         progreso.animateTo(1f, tween(480, easing = CurvaSuave))
     }
